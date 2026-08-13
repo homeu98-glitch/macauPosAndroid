@@ -13,20 +13,20 @@
     * { box-sizing: border-box; }
     body {
       margin: 0; font-family: sans-serif; color: var(--text);
-      background: radial-gradient(900px 500px at 10% -10%, #1e3a5f 0%, transparent 50%), var(--bg);
-      padding: 16px; padding-bottom: 40px;
+      background: var(--bg);
+      padding: 10px 10px 28px;
     }
-    h1 { font-size: 1.35rem; margin: 0 0 6px; }
-    .sub { color: var(--muted); font-size: 0.88rem; line-height: 1.45; margin-bottom: 14px; }
+    h1 { font-size: 1.15rem; margin: 0 0 2px; }
+    .local-ip { color: var(--ok); font-size: 0.82rem; font-family: monospace; margin: 0 0 8px; }
     .card {
-      background: linear-gradient(180deg, var(--panel), #161d26);
-      border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px;
     }
-    h2 { font-size: 1rem; margin: 0 0 10px; }
-    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    h2 { font-size: 0.92rem; margin: 0 0 6px; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
     button, input, select, textarea {
-      font: inherit; border-radius: 10px; border: 1px solid var(--line);
-      background: var(--panel2); color: var(--text); padding: 10px 12px;
+      font: inherit; border-radius: 8px; border: 1px solid var(--line);
+      background: var(--panel2); color: var(--text); padding: 8px 10px;
     }
     button { cursor: pointer; }
     button.primary { background: #0ea5e9; border-color: #0284c7; color: #041018; font-weight: 700; }
@@ -35,40 +35,35 @@
     button.bar { border-color: rgba(167,139,250,.5); }
     button.kitchen { border-color: rgba(251,146,60,.5); }
     input, select, textarea { width: 100%; background: #0b1220; }
-    textarea { min-height: 80px; }
-    .status { color: var(--ok); font-size: 0.85rem; min-height: 1.2em; margin-top: 6px; }
-    .hint {
-      background: rgba(56,189,248,.08); border: 1px dashed rgba(56,189,248,.35);
-      border-radius: 10px; padding: 10px; color: #bae6fd; font-size: 0.82rem; margin-bottom: 10px;
-    }
+    textarea { min-height: 56px; }
+    .status { color: var(--ok); font-size: 0.78rem; min-height: 1em; margin-top: 4px; }
     .device {
-      background: var(--panel2); border-radius: 10px; padding: 10px; margin-bottom: 8px;
+      background: var(--panel2); border-radius: 8px; padding: 8px; margin-bottom: 6px;
     }
-    .mac { font-family: monospace; font-size: 0.8rem; color: #cbd5e1; }
+    .mac { font-family: monospace; font-size: 0.75rem; color: #cbd5e1; }
     .pill {
-      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700;
+      display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 700;
     }
     .pill.front { background: rgba(96,165,250,.15); color: var(--front); }
     .pill.bar { background: rgba(167,139,250,.15); color: var(--bar); }
     .pill.kitchen { background: rgba(251,146,60,.15); color: var(--kitchen); }
     .pill.none { background: rgba(148,163,184,.12); color: var(--muted); }
     .log {
-      background: #0b1220; border: 1px solid var(--line); border-radius: 10px;
-      height: 180px; overflow: auto; font-family: monospace; font-size: 0.75rem;
-      padding: 8px; color: #cbd5e1;
+      background: #0b1220; border: 1px solid var(--line); border-radius: 8px;
+      height: 110px; overflow: auto; font-family: monospace; font-size: 0.72rem;
+      padding: 6px; color: #cbd5e1;
     }
     .log .warn { color: var(--warn); }
-    label.check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.85rem; }
-    .svc-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    label.check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.8rem; }
+    .svc-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
   </style>
 </head>
 <body>
   <h1>POS 印表機 Demo</h1>
-  <p class="sub">Android 原生掃 LAN（非 mock）→ 綁服務 → 本地保存。列印走 TCP 9100 ESC/POS。</p>
+  <p class="local-ip" id="localIp">本機 IP：偵測中…</p>
 
   <div class="card">
     <h2>區網掃描</h2>
-    <div class="hint">手機會掃目前網段 <code>x.x.x.1–254</code> 的 9100／631／80。Brother 辦公機常只有 80/IPP，可能掃得到但無法 9100 列印。</div>
     <div class="row">
       <input id="subnet" placeholder="網段前綴，例如 10.1.2" style="flex:1;min-width:140px" />
       <button type="button" id="btnDetect">自動偵測</button>
@@ -84,9 +79,9 @@
   <div class="card">
     <h2>手動新增</h2>
     <input id="manualIp" placeholder="IP，例如 10.1.2.52" />
-    <div style="height:8px"></div>
+    <div style="height:6px"></div>
     <input id="manualName" placeholder="名稱（可選）" />
-    <div style="height:8px"></div>
+    <div style="height:6px"></div>
     <select id="manualService">
       <option value="">未指定</option>
       <option value="front">前台</option>
@@ -104,7 +99,7 @@
   <div class="card">
     <h2>依服務列印測試</h2>
     <textarea id="msg">桌號 A12｜可樂 x2｜薯條 x1</textarea>
-    <div class="svc-btns" style="margin-top:8px">
+    <div class="svc-btns" style="margin-top:6px">
       <button type="button" class="front" data-print="front">前台</button>
       <button type="button" class="bar" data-print="bar">水吧</button>
       <button type="button" class="kitchen" data-print="kitchen">廚房</button>
@@ -124,6 +119,12 @@
     };
 
     function setStatus(t) { document.getElementById('status').textContent = t; }
+
+    function setLocalIp(ip) {
+      document.getElementById('localIp').textContent = ip
+        ? '本機 IP：' + ip
+        : '本機 IP：無法偵測';
+    }
 
     function logLine(text, warn) {
       const box = document.getElementById('log');
@@ -153,7 +154,7 @@
           '<div class="mac">IP ' + escapeHtml(d.ip) + '</div>' +
           '<div class="mac">MAC ' + escapeHtml(d.mac || '(系統未提供 ARP)') + '</div>' +
           '<div class="mac">Ports ' + escapeHtml(ports) + ' · ' + raw + '</div>' +
-          '<select data-key="' + escapeHtml(d.key) + '" style="margin-top:8px">' +
+          '<select data-key="' + escapeHtml(d.key) + '" style="margin-top:6px">' +
           '<option value=""' + (!d.service ? ' selected' : '') + '>未指定</option>' +
           Object.keys(SERVICES).map(id =>
             '<option value="' + id + '"' + (d.service === id ? ' selected' : '') + '>' +
@@ -178,16 +179,17 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    // Native callbacks
     window.onScanProgress = (msg) => setStatus(msg);
     window.onScanDone = (devices, msg) => { render(devices); setStatus(msg); logLine(msg); };
     window.onDevicesUpdated = (devices, msg) => { render(devices); setStatus(msg); };
     window.onPrintLog = (msg, warn) => logLine(msg, !!warn);
 
     document.getElementById('btnDetect').onclick = () => {
+      const ip = PosNative.detectLocalIp();
       const p = PosNative.detectSubnet();
-      if (p) { document.getElementById('subnet').value = p; setStatus('偵測到網段 ' + p + '.x'); }
-      else setStatus('無法偵測，請手動輸入（需連 Wi‑Fi）');
+      setLocalIp(ip);
+      if (p) { document.getElementById('subnet').value = p; setStatus('已更新網段'); }
+      else setStatus('無法偵測網段');
     };
     document.getElementById('btnScan').onclick = () => {
       const prefix = document.getElementById('subnet').value.trim();
@@ -215,14 +217,15 @@
     };
     document.getElementById('btnClearLog').onclick = () => { document.getElementById('log').innerHTML = ''; };
 
-    // bootstrap
     try {
       const boot = JSON.parse(PosNative.getBootstrapJson());
       document.getElementById('subnet').value = boot.subnetPrefix || '';
+      setLocalIp(boot.localIp || '');
       render(boot.devices || []);
-      setStatus('已還原 ' + (boot.devices || []).length + ' 台｜網段 ' + (boot.subnetPrefix || '?') + '.x');
+      const n = (boot.devices || []).length;
+      setStatus(n ? ('已還原 ' + n + ' 台') : '就緒');
     } catch (e) {
-      setStatus('初始化失敗: ' + e);
+      setStatus('初始化失敗');
     }
   </script>
 </body>

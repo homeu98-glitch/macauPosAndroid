@@ -48,8 +48,10 @@ class MainActivity : ComponentActivity() {
     private inner class Bridge {
         @JavascriptInterface
         fun getBootstrapJson(): String {
+            val localIp = scanner.detectLocalIpv4().orEmpty()
             val prefix = scanner.detectSubnetPrefix().orEmpty()
             return JSONObject()
+                .put("localIp", localIp)
                 .put("subnetPrefix", prefix.ifEmpty { "192.168.1" })
                 .put("devices", devicesToJson())
                 .toString()
@@ -57,6 +59,9 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun detectSubnet(): String = scanner.detectSubnetPrefix().orEmpty()
+
+        @JavascriptInterface
+        fun detectLocalIp(): String = scanner.detectLocalIpv4().orEmpty()
 
         @JavascriptInterface
         fun startScan(prefix: String, identify: Boolean) {

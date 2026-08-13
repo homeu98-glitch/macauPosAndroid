@@ -36,8 +36,7 @@ data class ScanProgress(
 
 class LanScanner(private val context: Context) {
 
-    fun detectSubnetPrefix(): String? {
-        // 優先 ConnectivityManager（不必定位權限）
+    fun detectLocalIpv4(): String? {
         try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val network = cm.activeNetwork
@@ -45,10 +44,7 @@ class LanScanner(private val context: Context) {
             val ipv4 = lp?.linkAddresses
                 ?.mapNotNull { it.address as? Inet4Address }
                 ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-            val parts = ipv4?.hostAddress?.split(".")
-            if (parts != null && parts.size == 4) {
-                return "${parts[0]}.${parts[1]}.${parts[2]}"
-            }
+            ipv4?.hostAddress?.takeIf { it.split(".").size == 4 }?.let { return it }
         } catch (_: Exception) {
         }
 
@@ -59,11 +55,18 @@ class LanScanner(private val context: Context) {
             if (ipInt == 0) null
             else {
                 val bytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(ipInt).array()
-                "${bytes[0].toInt() and 0xff}.${bytes[1].toInt() and 0xff}.${bytes[2].toInt() and 0xff}"
+                "${bytes[0].toInt() and 0xff}.${bytes[1].toInt() and 0xff}.${bytes[2].toInt() and 0xff}.${bytes[3].toInt() and 0xff}"
             }
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun detectSubnetPrefix(): String? {
+        val ip = detectLocalIpv4() ?: return null
+        val parts = ip.split(".")
+        if (parts.size != 4) return null
+        return "${parts[0]}.${parts[1]}.${parts[2]}"
     }
 
     suspend fun scanSubnet(
