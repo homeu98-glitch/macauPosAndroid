@@ -13,8 +13,7 @@
     * { box-sizing: border-box; }
     body {
       margin: 0; font-family: sans-serif; color: var(--text);
-      background: var(--bg);
-      padding: 10px 10px 28px;
+      background: var(--bg); padding: 10px 10px 28px;
     }
     h1 { font-size: 1.15rem; margin: 0 0 2px; }
     .local-ip { color: var(--ok); font-size: 0.82rem; font-family: monospace; margin: 0 0 8px; }
@@ -22,9 +21,7 @@
       font-family: monospace; font-size: 0.95rem; color: var(--ok);
       word-break: break-all; margin: 0 0 4px;
     }
-    .qr-wrap {
-      display: flex; justify-content: center; margin: 8px 0;
-    }
+    .qr-wrap { display: flex; justify-content: center; margin: 8px 0; }
     #pairQr {
       display: none; width: 200px; height: 200px;
       background: #fff; padding: 8px; border-radius: 8px;
@@ -35,23 +32,8 @@
       border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px;
     }
     h2 { font-size: 0.92rem; margin: 0 0 6px; }
-    .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-    button, input, select, textarea {
-      font: inherit; border-radius: 8px; border: 1px solid var(--line);
-      background: var(--panel2); color: var(--text); padding: 8px 10px;
-    }
-    button { cursor: pointer; }
-    button.primary { background: #0ea5e9; border-color: #0284c7; color: #041018; font-weight: 700; }
-    button.danger { color: var(--danger); border-color: #7f1d1d; background: transparent; }
-    button.front { border-color: rgba(96,165,250,.5); }
-    button.bar { border-color: rgba(167,139,250,.5); }
-    button.kitchen { border-color: rgba(251,146,60,.5); }
-    input, select, textarea { width: 100%; background: #0b1220; }
-    textarea { min-height: 56px; }
     .status { color: var(--ok); font-size: 0.78rem; min-height: 1em; margin-top: 4px; }
-    .device {
-      background: var(--panel2); border-radius: 8px; padding: 8px; margin-bottom: 6px;
-    }
+    .device { background: var(--panel2); border-radius: 8px; padding: 8px; margin-bottom: 6px; }
     .mac { font-family: monospace; font-size: 0.75rem; color: #cbd5e1; }
     .pill {
       display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 700;
@@ -66,8 +48,6 @@
       padding: 6px; color: #cbd5e1;
     }
     .log .warn { color: var(--warn); }
-    label.check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.8rem; }
-    .svc-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
   </style>
 </head>
 <body>
@@ -75,66 +55,22 @@
   <p class="local-ip" id="localIp">本機 IP：偵測中…</p>
 
   <div class="card">
-    <h2>區網 Hub（離線 Web 列印）</h2>
+    <h2>區網 Hub</h2>
     <p class="hub-url" id="hubUrl">啟動中…</p>
     <div class="qr-wrap"><img id="pairQr" alt="配對 QR Code" /></div>
-    <p class="hint">用 GitHub 測試頁掃描此 QR 即可配對，也可手動輸入 IP。請先掃描並綁定前台／水吧／廚房。</p>
+    <p class="hint">手機打開 GitHub 測試頁掃描此 QR。設定印表機會導向本機網頁；出單由 Hub 依綁定分送。</p>
     <div class="status" id="hubStatus"></div>
   </div>
 
   <div class="card">
     <h2>Web 送來的指令</h2>
-    <p class="hub-url" id="lastWeb">尚無。從 GitHub 測試頁按前台／水吧／廚房會顯示在這裡。</p>
+    <p class="hub-url" id="lastWeb">尚無</p>
     <div class="log" id="webLog"></div>
   </div>
 
   <div class="card">
-    <h2>區網掃描</h2>
-    <div class="row">
-      <input id="subnet" placeholder="網段前綴，例如 10.1.2" style="flex:1;min-width:140px" />
-      <button type="button" id="btnDetect">自動偵測</button>
-    </div>
-    <div class="row">
-      <button type="button" class="primary" id="btnScan">掃描區網</button>
-      <button type="button" class="danger" id="btnClear">清除綁定</button>
-    </div>
-    <label class="check"><input type="checkbox" id="identify" /> 掃描時對 9100 設備列印識別頁</label>
-    <div class="status" id="status">就緒</div>
-  </div>
-
-  <div class="card">
-    <h2>手動新增</h2>
-    <input id="manualIp" placeholder="IP，例如 10.1.2.52" />
-    <div style="height:6px"></div>
-    <input id="manualName" placeholder="名稱（可選）" />
-    <div style="height:6px"></div>
-    <select id="manualService">
-      <option value="">未指定</option>
-      <option value="front">前台</option>
-      <option value="bar">水吧</option>
-      <option value="kitchen">廚房</option>
-    </select>
-    <div class="row"><button type="button" id="btnAdd">新增並探測</button></div>
-  </div>
-
-  <div class="card">
-    <h2>已發現 / 已綁定</h2>
+    <h2>已綁定設備</h2>
     <div id="list"></div>
-  </div>
-
-  <div class="card">
-    <h2>依服務列印測試</h2>
-    <textarea id="msg">桌號 A12｜可樂 x2｜薯條 x1</textarea>
-    <div class="svc-btns" style="margin-top:6px">
-      <button type="button" class="front" data-print="front">前台</button>
-      <button type="button" class="bar" data-print="bar">水吧</button>
-      <button type="button" class="kitchen" data-print="kitchen">廚房</button>
-    </div>
-    <div class="row">
-      <button type="button" id="btnPrintAll">一次印三區</button>
-      <button type="button" id="btnClearLog">清除日誌</button>
-    </div>
-    <div class="log" id="log"></div>
   </div>
 
   <script>
@@ -144,12 +80,8 @@
       kitchen: { label: '廚房', cls: 'kitchen' },
     };
 
-    function setStatus(t) { document.getElementById('status').textContent = t; }
-
     function setLocalIp(ip) {
-      document.getElementById('localIp').textContent = ip
-        ? '本機 IP：' + ip
-        : '本機 IP：無法偵測';
+      document.getElementById('localIp').textContent = ip ? '本機 IP：' + ip : '本機 IP：無法偵測';
     }
 
     let lastQrUrl = '';
@@ -159,15 +91,13 @@
       const qr = document.getElementById('pairQr');
       if (boot.hubUrl) {
         el.textContent = boot.hubUrl;
-        st.textContent = boot.hubListening ? 'Hub 已在聽取' : 'Hub 啟動中…若持續未就緒請允許通知權限';
+        st.textContent = boot.hubListening ? 'Hub 已在聽取' : 'Hub 啟動中…';
         if (boot.hubUrl !== lastQrUrl) {
           lastQrUrl = boot.hubUrl;
           try {
             qr.src = PosNative.getPairQrDataUrl();
             qr.style.display = 'block';
-          } catch (e) {
-            qr.style.display = 'none';
-          }
+          } catch (e) { qr.style.display = 'none'; }
         }
       } else {
         el.textContent = '無法偵測 IP（請連 Wi‑Fi）';
@@ -175,15 +105,6 @@
         qr.style.display = 'none';
         lastQrUrl = '';
       }
-    }
-
-    function logLine(text, warn) {
-      const box = document.getElementById('log');
-      const div = document.createElement('div');
-      const t = new Date().toLocaleTimeString('zh-TW', { hour12: false });
-      div.className = warn ? 'warn' : '';
-      div.textContent = '[' + t + '] ' + text;
-      box.prepend(div);
     }
 
     function logWeb(text, warn) {
@@ -199,13 +120,16 @@
       const line = '給' + label + '｜' + message;
       document.getElementById('lastWeb').textContent = line;
       logWeb(line + (printed > 0 ? '（已出紙）' : '（無印表機，僅記錄）'), printed <= 0);
-      logLine('收到 Web → ' + line, printed <= 0);
     };
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
 
     function render(devices) {
       const root = document.getElementById('list');
       if (!devices.length) {
-        root.innerHTML = '<div style="color:var(--muted)">尚無設備。請掃描或手動新增。</div>';
+        root.innerHTML = '<div style="color:var(--muted)">尚無綁定。請用手機 print.html 進入設定頁掃描。</div>';
         return;
       }
       root.innerHTML = devices.map(d => {
@@ -213,95 +137,21 @@
         const pill = svc
           ? '<span class="pill ' + svc.cls + '">' + svc.label + '</span>'
           : '<span class="pill none">未指定</span>';
-        const ports = (d.openPorts || []).join(', ') || '-';
         const raw = d.canRawPrint ? '可 raw 列印' : '無 9100';
-        return (
-          '<div class="device">' +
-          '<div><b>' + escapeHtml(d.name) + '</b> ' + pill + '</div>' +
-          '<div class="mac">IP ' + escapeHtml(d.ip) + '</div>' +
-          '<div class="mac">MAC ' + escapeHtml(d.mac || '(系統未提供 ARP)') + '</div>' +
-          '<div class="mac">Ports ' + escapeHtml(ports) + ' · ' + raw + '</div>' +
-          '<select data-key="' + escapeHtml(d.key) + '" style="margin-top:6px">' +
-          '<option value=""' + (!d.service ? ' selected' : '') + '>未指定</option>' +
-          Object.keys(SERVICES).map(id =>
-            '<option value="' + id + '"' + (d.service === id ? ' selected' : '') + '>' +
-            SERVICES[id].label + '</option>'
-          ).join('') +
-          '</select>' +
-          '<div class="row"><button type="button" class="danger" data-remove="' +
-          escapeHtml(d.key) + '">移除</button></div>' +
-          '</div>'
-        );
+        return '<div class="device"><div><b>' + escapeHtml(d.name) + '</b> ' + pill +
+          '</div><div class="mac">IP ' + escapeHtml(d.ip) + ' · ' + raw + '</div></div>';
       }).join('');
-
-      root.querySelectorAll('select[data-key]').forEach(sel => {
-        sel.addEventListener('change', () => PosNative.assignService(sel.getAttribute('data-key'), sel.value));
-      });
-      root.querySelectorAll('button[data-remove]').forEach(btn => {
-        btn.addEventListener('click', () => PosNative.removeDevice(btn.getAttribute('data-remove')));
-      });
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-
-    window.onScanProgress = (msg) => setStatus(msg);
-    window.onScanDone = (devices, msg) => { render(devices); setStatus(msg); logLine(msg); };
-    window.onDevicesUpdated = (devices, msg) => { render(devices); setStatus(msg); };
-    window.onPrintLog = (msg, warn) => logLine(msg, !!warn);
-
-    document.getElementById('btnDetect').onclick = () => {
-      const ip = PosNative.detectLocalIp();
-      const p = PosNative.detectSubnet();
-      setLocalIp(ip);
-      if (p) { document.getElementById('subnet').value = p; setStatus('已更新網段'); }
-      else setStatus('無法偵測網段');
-    };
-    document.getElementById('btnScan').onclick = () => {
-      const prefix = document.getElementById('subnet').value.trim();
-      if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(prefix)) {
-        setStatus('網段格式錯誤，例如 10.1.2'); return;
-      }
-      PosNative.startScan(prefix, document.getElementById('identify').checked);
-    };
-    document.getElementById('btnClear').onclick = () => {
-      if (confirm('清除全部綁定？')) PosNative.clearAll();
-    };
-    document.getElementById('btnAdd').onclick = () => {
-      PosNative.addManual(
-        document.getElementById('manualIp').value,
-        document.getElementById('manualName').value,
-        document.getElementById('manualService').value
-      );
-    };
-    document.querySelectorAll('[data-print]').forEach(btn => {
-      btn.onclick = () => PosNative.printService(btn.getAttribute('data-print'), document.getElementById('msg').value);
-    });
-    document.getElementById('btnPrintAll').onclick = () => {
-      const msg = document.getElementById('msg').value;
-      ['front','bar','kitchen'].forEach(id => PosNative.printService(id, msg));
-    };
-    document.getElementById('btnClearLog').onclick = () => { document.getElementById('log').innerHTML = ''; };
-
-    try {
+    function applyBoot() {
       const boot = JSON.parse(PosNative.getBootstrapJson());
-      document.getElementById('subnet').value = boot.subnetPrefix || '';
       setLocalIp(boot.localIp || '');
       setHub(boot);
       render(boot.devices || []);
-      const n = (boot.devices || []).length;
-      setStatus(n ? ('已還原 ' + n + ' 台') : '就緒');
-    } catch (e) {
-      setStatus('初始化失敗');
     }
-    setInterval(() => {
-      try {
-        const boot = JSON.parse(PosNative.getBootstrapJson());
-        setLocalIp(boot.localIp || '');
-        setHub(boot);
-      } catch (e) {}
-    }, 2000);
+
+    try { applyBoot(); } catch (e) {}
+    setInterval(() => { try { applyBoot(); } catch (e) {} }, 2000);
   </script>
 </body>
 </html>

@@ -5,8 +5,12 @@ import com.posdemo.printer.data.DeviceStore
 import com.posdemo.printer.model.PrinterDevice
 import com.posdemo.printer.model.PrinterService
 import com.posdemo.printer.net.EscPosPrinter
+import com.posdemo.printer.net.LanScanner
 import com.posdemo.printer.net.ScanHit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,13 +26,24 @@ data class PrintJobResult(
 }
 
 class PrinterHub private constructor(context: Context) {
-    private val store = DeviceStore(context.applicationContext)
+    private val app = context.applicationContext
+    private val store = DeviceStore(app)
+    private val scanner = LanScanner(app)
     private val printer = EscPosPrinter()
     private val devices = LinkedHashMap<String, PrinterDevice>()
     private val lock = Any()
+    private val scanScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     var listening: Boolean = false
+
+    @Volatile
+    var scanRunning: Boolean = false
+        private set
+
+    @Volatile
+    var scanMessage: String = "就緒"
+        private set
 
     @Volatile
     var webCommandListener: WebCommandListener? = null
@@ -39,6 +54,57 @@ class PrinterHub private constructor(context: Context) {
 
     init {
         synchronized(lock) { devices.putAll(store.load()) }
+    }
+
+    fun localIp(): String = scanner.detectLocalIpv4().orEmpty()
+
+    fun subnetPrefix(): String = scanner.detectSubnetPrefix().orEmpty()
+
+    fun requestScan(prefix: String, identify: Boolean): Boolean {
+        val p = prefix.trim()
+        if (!p.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}"""))) return false
+        if (scanRunning) return false
+        scanRunning = true
+        scanMessage = "準備掃描…"
+        scanScope.launch {
+            try {
+                val hits = scanner.scanSubnet(p) { prog ->
+                    scanMessage = "掃描中 ${prog.checked}/${prog.total}｜發現 ${prog.found}"
+                }
+                var identifyOk = 0
+                hits.forEach { hit ->
+                    mergeHit(hit)
+                    if (identify && 9100 in hit.openPorts) {
+                        val body = "IP: ${hit.ip}\nMAC: ${hit.mac ?: "(n/a)"}\nPorts: ${hit.openPorts}"
+                        if (printIdentify(hit.ip, body)) identifyOk++
+                    }
+                }
+                save()
+                scanMessage = "掃描完成：發現 ${hits.size} 台｜識別列印 $identifyOk"
+            } catch (e: Exception) {
+                scanMessage = "掃描失敗：${e.message ?: "error"}"
+            } finally {
+                scanRunning = false
+            }
+        }
+        return true
+    }
+
+    fun addManualBlocking(ip: String, name: String, serviceId: String) {
+        val trimmed = ip.trim()
+        val service = PrinterService.fromId(serviceId.ifBlank { null })
+        val hit = scanner.probeIp(trimmed)
+        if (hit == null) {
+            putManual(trimmed, name, service)
+        } else {
+            mergeHit(hit, name.ifBlank { null }, service)
+            save()
+        }
+    }
+
+    fun hubUrl(): String {
+        val ip = localIp()
+        return if (ip.isBlank()) "" else "http://$ip:$PORT"
     }
 
     fun snapshot(): List<PrinterDevice> = synchronized(lock) { devices.values.toList() }

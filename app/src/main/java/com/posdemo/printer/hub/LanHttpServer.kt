@@ -82,11 +82,20 @@ class LanHttpServer(
         }
         val path = req.path
         return when {
-            req.method == "GET" && (path == "/" || path == "/remote.html") ->
-                asset("remote.html", "text/html; charset=utf-8")
+            req.method == "GET" && (path == "/" || path == "/setup.html" || path == "/setup" || path == "/remote.html") ->
+                asset("setup.html", "text/html; charset=utf-8")
             req.method == "GET" && path == "/api/status" -> json(statusJson())
             req.method == "GET" && path == "/api/devices" ->
                 json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+            req.method == "GET" && path == "/api/scan" -> json(scanJson())
+            req.method == "POST" && path == "/api/scan" -> handlePostScan(req)
+            req.method == "POST" && path == "/api/assign" -> handlePostAssign(req)
+            req.method == "POST" && path == "/api/manual" -> handlePostManual(req)
+            req.method == "POST" && path == "/api/remove" -> handlePostRemove(req)
+            req.method == "POST" && path == "/api/clear" -> {
+                hub.clearAll()
+                json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+            }
             req.method == "GET" && path == "/print" -> handlePrintHtml(req.query)
             req.method == "GET" && (path == "/beacon" || path == "/beacon.png") ->
                 handlePrintBeacon(req.query)
@@ -99,6 +108,52 @@ class LanHttpServer(
             )
         }
     }
+
+    private fun handlePostScan(req: HttpRequest): ByteArray {
+        val fields = parsePostFields(req) ?: emptyMap()
+        val prefix = fields["prefix"].orEmpty().ifBlank { hub.subnetPrefix() }
+        val identify = fields["identify"].equals("true", ignoreCase = true)
+        val started = hub.requestScan(prefix, identify)
+        return json(
+            JSONObject()
+                .put("ok", started)
+                .put("started", started)
+                .put("running", hub.scanRunning)
+                .put("message", if (started) hub.scanMessage else "掃描進行中或網段無效")
+                .put("prefix", prefix),
+            if (started) 200 else 409,
+        )
+    }
+
+    private fun handlePostAssign(req: HttpRequest): ByteArray {
+        val fields = parsePostFields(req) ?: return json(JSONObject().put("ok", false), 400)
+        val key = fields["key"].orEmpty()
+        if (key.isBlank()) return json(JSONObject().put("ok", false).put("error", "key required"), 400)
+        hub.assignService(key, fields["service"].orEmpty())
+        return json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+    }
+
+    private fun handlePostManual(req: HttpRequest): ByteArray {
+        val fields = parsePostFields(req) ?: return json(JSONObject().put("ok", false), 400)
+        val ip = fields["ip"].orEmpty().trim()
+        if (ip.isBlank()) return json(JSONObject().put("ok", false).put("error", "ip required"), 400)
+        hub.addManualBlocking(ip, fields["name"].orEmpty(), fields["service"].orEmpty())
+        return json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+    }
+
+    private fun handlePostRemove(req: HttpRequest): ByteArray {
+        val fields = parsePostFields(req) ?: return json(JSONObject().put("ok", false), 400)
+        val key = fields["key"].orEmpty()
+        if (key.isBlank()) return json(JSONObject().put("ok", false).put("error", "key required"), 400)
+        hub.removeDevice(key)
+        return json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+    }
+
+    private fun scanJson(): JSONObject = JSONObject()
+        .put("ok", true)
+        .put("running", hub.scanRunning)
+        .put("message", hub.scanMessage)
+        .put("devices", hub.devicesJson())
 
     private fun handlePrintHtml(query: Map<String, String>): ByteArray {
         val service = query["service"].orEmpty()
@@ -172,12 +227,18 @@ class LanHttpServer(
         return try {
             if (ct.contains("json")) {
                 val obj = JSONObject(req.body.ifBlank { "{}" })
-                mapOf(
-                    "service" to obj.optString("service"),
-                    "ip" to obj.optString("ip"),
-                    "title" to obj.optString("title"),
-                    "message" to obj.optString("message"),
-                )
+                val map = HashMap<String, String>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = obj.opt(k)
+                    map[k] = when (v) {
+                        null, JSONObject.NULL -> ""
+                        is Boolean, is Number -> v.toString()
+                        else -> obj.optString(k)
+                    }
+                }
+                map
             } else {
                 parseQuery(req.body)
             }
@@ -273,8 +334,14 @@ class LanHttpServer(
             .put("ok", true)
             .put("listening", hub.listening)
             .put("port", port)
+            .put("localIp", hub.localIp())
+            .put("subnetPrefix", hub.subnetPrefix().ifBlank { "192.168.1" })
+            .put("hubUrl", hub.hubUrl())
+            .put("scanRunning", hub.scanRunning)
+            .put("scanMessage", hub.scanMessage)
             .put("deviceCount", devices.size)
             .put("bound", devices.count { it.service != null })
+            .put("devices", hub.devicesJson())
     }
 
     private fun asset(name: String, contentType: String): ByteArray {
@@ -293,7 +360,7 @@ class LanHttpServer(
             200 -> "OK"
             204 -> "No Content"
             400 -> "Bad Request"
-            413 -> "Payload Too Large"
+            409 -> "Conflict"
             502 -> "Bad Gateway"
             else -> "Error"
         }

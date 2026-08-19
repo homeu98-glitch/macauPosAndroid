@@ -52,7 +52,7 @@
 <body>
   <h1>POS 區網出單</h1>
   <p class="hint">
-    掃描 Android Hub 上的配對 QR，或手動輸入 IP。大單會用 POST（若瀏覽器允許）；GitHub HTTPS 則拆成多段隱藏傳送，不會開新分頁。
+    手機掃描 Android 上的 QR 配對 Hub。設定印表機會跳到 Hub 網頁掃描區網並綁定；之後出單由 Hub 分送到對應印表機。
   </p>
 
   <div class="card">
@@ -72,7 +72,7 @@
     <input id="hubPort" value="8787" inputmode="numeric" />
     <div class="row">
       <button type="button" id="btnSave">記住 IP</button>
-      <button type="button" id="btnOpen">開啟 Hub 頁</button>
+      <button type="button" class="primary" id="btnSetup">設定印表機</button>
     </div>
     <p class="hint ok" id="saved"></p>
   </div>
@@ -297,11 +297,12 @@
       img.src = URL.createObjectURL(file);
     };
     document.getElementById('btnSave').onclick = saveHub;
-    document.getElementById('btnOpen').onclick = () => {
+    document.getElementById('btnSetup').onclick = () => {
       saveHub();
       const base = hubBase();
       if (!base) { logLine('請先掃描 QR 或填 Hub IP', true); return; }
-      window.open(base + '/', 'posPrinterHub');
+      const ret = encodeURIComponent(location.href.split('#')[0]);
+      location.href = base + '/setup.html?return=' + ret;
     };
     document.querySelectorAll('[data-print]').forEach(btn => {
       btn.onclick = () => send(btn.getAttribute('data-print'));

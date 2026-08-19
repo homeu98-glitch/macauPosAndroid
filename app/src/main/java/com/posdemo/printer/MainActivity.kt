@@ -14,7 +14,6 @@ import androidx.lifecycle.lifecycleScope
 import com.posdemo.printer.hub.PairQr
 import com.posdemo.printer.hub.PrintHubService
 import com.posdemo.printer.hub.PrinterHub
-import com.posdemo.printer.model.PrinterService
 import com.posdemo.printer.net.LanScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,43 +95,15 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun startScan(prefix: String, identify: Boolean) {
-            lifecycleScope.launch {
-                evalJs("onScanProgress('準備掃描…')")
-                val hits = withContext(Dispatchers.IO) {
-                    scanner.scanSubnet(prefix) { p ->
-                        lifecycleScope.launch {
-                            evalJs("onScanProgress('掃描中 ${p.checked}/${p.total}｜發現 ${p.found}')")
-                        }
-                    }
-                }
-                var identifyOk = 0
-                hits.forEach { hit ->
-                    hub.mergeHit(hit)
-                    if (identify && 9100 in hit.openPorts) {
-                        val body = "IP: ${hit.ip}\nMAC: ${hit.mac ?: "(n/a)"}\nPorts: ${hit.openPorts}"
-                        if (hub.printIdentify(hit.ip, body)) identifyOk++
-                    }
-                }
-                hub.save()
-                evalJs(
-                    "onScanDone(${hub.devicesJson()}, " +
-                        "'掃描完成：發現 ${hits.size} 台｜識別列印 $identifyOk')"
-                )
-            }
+            hub.requestScan(prefix, identify)
         }
 
         @JavascriptInterface
         fun addManual(ip: String, name: String, serviceId: String) {
-            lifecycleScope.launch {
-                val hit = withContext(Dispatchers.IO) { scanner.probeIp(ip.trim()) }
-                val service = PrinterService.fromId(serviceId.ifBlank { null })
-                if (hit == null) {
-                    hub.putManual(ip.trim(), name, service)
-                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '連不到埠，已先手動保存 ${ip.trim()}')")
-                } else {
-                    hub.mergeHit(hit, name.ifBlank { null }, service)
-                    hub.save()
-                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '已保存 ${hit.ip}')")
+            lifecycleScope.launch(Dispatchers.IO) {
+                hub.addManualBlocking(ip, name, serviceId)
+                withContext(Dispatchers.Main) {
+                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '已保存')")
                 }
             }
         }
