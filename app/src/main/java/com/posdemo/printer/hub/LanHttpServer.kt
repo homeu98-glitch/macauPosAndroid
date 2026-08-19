@@ -21,6 +21,8 @@ class LanHttpServer(
 ) {
     private val app = context.applicationContext
     private val hub = PrinterHub.get(app)
+    private val assembleLock = Any()
+    private val assembleJobs = LinkedHashMap<String, AssembleJob>()
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
@@ -90,19 +92,7 @@ class LanHttpServer(
                 handlePrintBeacon(req.query)
             req.method == "GET" && path == "/api/print" ->
                 handlePrintJson(req.query["service"].orEmpty(), req.query["ip"].orEmpty(), req.query["title"].orEmpty(), req.query["message"].orEmpty())
-            req.method == "POST" && path == "/api/print" -> {
-                val obj = try {
-                    JSONObject(req.body.ifBlank { "{}" })
-                } catch (_: Exception) {
-                    return json(JSONObject().put("ok", false).put("error", "invalid json"), 400)
-                }
-                handlePrintJson(
-                    obj.optString("service"),
-                    obj.optString("ip"),
-                    obj.optString("title"),
-                    obj.optString("message"),
-                )
-            }
+            req.method == "POST" && path == "/api/print" -> handlePostPrint(req)
             else -> json(
                 JSONObject().put("ok", false).put("error", "not found"),
                 404,
@@ -144,13 +134,90 @@ class LanHttpServer(
     }
 
     private fun handlePrintBeacon(query: Map<String, String>): ByteArray {
-        runPrint(
-            query["service"].orEmpty(),
-            query["ip"].orEmpty(),
-            query["title"].orEmpty(),
-            query["message"].orEmpty(),
-        )
+        val jobId = query["job"].orEmpty()
+        if (jobId.isNotBlank()) {
+            val ready = takeChunk(query)
+            if (ready != null) {
+                runPrint(ready.service, ready.ip, ready.title, ready.message)
+            }
+        } else {
+            runPrint(
+                query["service"].orEmpty(),
+                query["ip"].orEmpty(),
+                query["title"].orEmpty(),
+                query["message"].orEmpty(),
+            )
+        }
         return http(200, "image/png", PIXEL_PNG)
+    }
+
+    private fun handlePostPrint(req: HttpRequest): ByteArray {
+        if (req.tooLarge) {
+            return json(JSONObject().put("ok", false).put("error", "payload too large"), 413)
+        }
+        val fields = parsePostFields(req) ?: return json(
+            JSONObject().put("ok", false).put("error", "invalid body"),
+            400,
+        )
+        return handlePrintJson(
+            fields["service"].orEmpty(),
+            fields["ip"].orEmpty(),
+            fields["title"].orEmpty(),
+            fields["message"].orEmpty(),
+        )
+    }
+
+    private fun parsePostFields(req: HttpRequest): Map<String, String>? {
+        val ct = req.contentType.lowercase()
+        return try {
+            if (ct.contains("json")) {
+                val obj = JSONObject(req.body.ifBlank { "{}" })
+                mapOf(
+                    "service" to obj.optString("service"),
+                    "ip" to obj.optString("ip"),
+                    "title" to obj.optString("title"),
+                    "message" to obj.optString("message"),
+                )
+            } else {
+                parseQuery(req.body)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun takeChunk(query: Map<String, String>): ReadyJob? {
+        val jobId = query["job"].orEmpty()
+        val seq = query["seq"]?.toIntOrNull() ?: return null
+        val total = query["total"]?.toIntOrNull() ?: return null
+        if (total !in 1..200 || seq !in 0 until total) return null
+        val chunk = query["chunk"].orEmpty()
+        synchronized(assembleLock) {
+            pruneJobsLocked()
+            val job = assembleJobs[jobId] ?: AssembleJob(
+                service = query["service"].orEmpty(),
+                ip = query["ip"].orEmpty(),
+                title = query["title"].orEmpty(),
+                parts = arrayOfNulls(total),
+            ).also { assembleJobs[jobId] = it }
+            if (job.parts.size != total) return null
+            job.parts[seq] = chunk
+            if (job.parts.any { it == null }) return null
+            assembleJobs.remove(jobId)
+            val message = job.parts.joinToString(separator = "") { it ?: "" }
+            if (message.length > MAX_MESSAGE) return null
+            return ReadyJob(job.service, job.ip, job.title, message)
+        }
+    }
+
+    private fun pruneJobsLocked() {
+        val now = System.currentTimeMillis()
+        val stale = assembleJobs.entries.filter { now - it.value.createdAt > 60_000 }.map { it.key }
+        stale.forEach { assembleJobs.remove(it) }
+        while (assembleJobs.size > 32) {
+            val oldest = assembleJobs.keys.firstOrNull() ?: break
+            assembleJobs.remove(oldest)
+        }
     }
 
     private fun handlePrintJson(service: String, ip: String, title: String, message: String): ByteArray {
@@ -226,7 +293,7 @@ class LanHttpServer(
             200 -> "OK"
             204 -> "No Content"
             400 -> "Bad Request"
-            404 -> "Not Found"
+            413 -> "Payload Too Large"
             502 -> "Bad Gateway"
             else -> "Error"
         }
@@ -279,6 +346,7 @@ class LanHttpServer(
         val rawPath = uri.substringBefore("?")
         val query = parseQuery(uri.substringAfter("?", ""))
         var contentLength = 0
+        var contentType = ""
         for (i in 1 until lines.size) {
             val line = lines[i]
             val idx = line.indexOf(':')
@@ -287,7 +355,12 @@ class LanHttpServer(
             val value = line.substring(idx + 1).trim()
             if (name.equals("Content-Length", ignoreCase = true)) {
                 contentLength = value.toIntOrNull() ?: 0
+            } else if (name.equals("Content-Type", ignoreCase = true)) {
+                contentType = value
             }
+        }
+        if (contentLength > MAX_BODY) {
+            return HttpRequest(method, rawPath, query, "", contentType, tooLarge = true)
         }
         val body = if (contentLength > 0) {
             val buf = ByteArray(contentLength)
@@ -299,7 +372,7 @@ class LanHttpServer(
             }
             String(buf, 0, off, Charsets.UTF_8)
         } else ""
-        return HttpRequest(method, rawPath, query, body)
+        return HttpRequest(method, rawPath, query, body, contentType, tooLarge = false)
     }
 
     private fun parseQuery(raw: String): Map<String, String> {
@@ -324,10 +397,29 @@ class LanHttpServer(
         val path: String,
         val query: Map<String, String>,
         val body: String,
+        val contentType: String = "",
+        val tooLarge: Boolean = false,
+    )
+
+    private class AssembleJob(
+        val service: String,
+        val ip: String,
+        val title: String,
+        val parts: Array<String?>,
+        val createdAt: Long = System.currentTimeMillis(),
+    )
+
+    private data class ReadyJob(
+        val service: String,
+        val ip: String,
+        val title: String,
+        val message: String,
     )
 
     companion object {
         private const val TAG = "LanHttpServer"
+        private const val MAX_BODY = 512 * 1024
+        private const val MAX_MESSAGE = 256 * 1024
 
         /** 1x1 透明 PNG，給 HTTPS 頁用隱藏圖片打區網 HTTP（被動 mixed content）。 */
         private val PIXEL_PNG = byteArrayOf(

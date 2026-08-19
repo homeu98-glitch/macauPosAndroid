@@ -52,7 +52,7 @@
 <body>
   <h1>POS 區網出單</h1>
   <p class="hint">
-    掃描 Android Hub 上的配對 QR，或手動輸入 IP。按出單不會開新分頁，請看 Android 畫面是否收到。必須與 Hub 同一 Wi‑Fi。
+    掃描 Android Hub 上的配對 QR，或手動輸入 IP。大單會用 POST（若瀏覽器允許）；GitHub HTTPS 則拆成多段隱藏傳送，不會開新分頁。
   </p>
 
   <div class="card">
@@ -213,20 +213,64 @@
       video.style.display = 'none';
     }
 
-    function send(service) {
+    async function send(service) {
       saveHub();
       const base = hubBase();
       const message = document.getElementById('msg').value;
       if (!base) { logLine('請先掃描 QR 或填 Hub IP', true); return; }
       if (!message.trim()) { logLine('請輸入訊息', true); return; }
-      const url = base + '/beacon.png?service=' + encodeURIComponent(service) +
-        '&message=' + encodeURIComponent(message) + '&t=' + Date.now();
-      logLine('送到 ' + service + ' → ' + base);
-      const img = new Image();
-      img.onload = () => logLine('Hub 已收到（請看 Android 畫面）');
-      img.onerror = () => logLine('已送出，請看 Android 是否出現指令', true);
-      img.referrerPolicy = 'no-referrer';
-      img.src = url;
+      logLine('送到 ' + service + ' → ' + base + '（' + message.length + ' 字）');
+      if (location.protocol !== 'https:') {
+        try {
+          const r = await fetch(base + '/api/print', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service, message }),
+          });
+          const j = await r.json();
+          if (j.received || j.ok) {
+            logLine('Hub 已收到（POST）');
+            return;
+          }
+        } catch (e) {}
+      }
+      sendChunkedBeacon(base, service, message);
+    }
+
+    function chunkMessage(msg, maxEncoded) {
+      const chunks = [];
+      let cur = '';
+      for (const ch of msg) {
+        const trial = cur + ch;
+        if (encodeURIComponent(trial).length > maxEncoded) {
+          if (cur) chunks.push(cur);
+          cur = ch;
+        } else {
+          cur = trial;
+        }
+      }
+      if (cur) chunks.push(cur);
+      return chunks.length ? chunks : [''];
+    }
+
+    function sendChunkedBeacon(base, service, message) {
+      const parts = chunkMessage(message, 1400);
+      const job = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      let left = parts.length;
+      parts.forEach((chunk, seq) => {
+        const url = base + '/beacon.png?job=' + encodeURIComponent(job) +
+          '&seq=' + seq + '&total=' + parts.length +
+          '&service=' + encodeURIComponent(service) +
+          '&chunk=' + encodeURIComponent(chunk) +
+          '&t=' + Date.now();
+        const img = new Image();
+        img.onload = img.onerror = () => {
+          left -= 1;
+          if (left === 0) logLine('Hub 已收到（請看 Android 畫面）');
+        };
+        img.referrerPolicy = 'no-referrer';
+        img.src = url;
+      });
     }
 
     document.getElementById('btnScanQr').onclick = startScan;
