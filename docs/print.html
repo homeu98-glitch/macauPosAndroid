@@ -52,8 +52,7 @@
 <body>
   <h1>POS 區網出單</h1>
   <p class="hint">
-    掃描 Android Hub 上的配對 QR，或手動輸入 IP。
-    按出單後會短暫開啟 Hub 頁再自動關閉。必須與 Hub 同一 Wi‑Fi。
+    掃描 Android Hub 上的配對 QR，或手動輸入 IP。按出單不會開新分頁，請看 Android 畫面是否收到。必須與 Hub 同一 Wi‑Fi。
   </p>
 
   <div class="card">
@@ -220,14 +219,14 @@
       const message = document.getElementById('msg').value;
       if (!base) { logLine('請先掃描 QR 或填 Hub IP', true); return; }
       if (!message.trim()) { logLine('請輸入訊息', true); return; }
-      const url = base + '/print?service=' + encodeURIComponent(service) +
-        '&message=' + encodeURIComponent(message);
+      const url = base + '/beacon.png?service=' + encodeURIComponent(service) +
+        '&message=' + encodeURIComponent(message) + '&t=' + Date.now();
       logLine('送到 ' + service + ' → ' + base);
-      const w = window.open(url, 'posPrinterHub');
-      if (!w) {
-        logLine('彈出視窗被擋，改在本頁開啟', true);
-        location.href = url;
-      }
+      const img = new Image();
+      img.onload = () => logLine('Hub 已收到（請看 Android 畫面）');
+      img.onerror = () => logLine('已送出，請看 Android 是否出現指令', true);
+      img.referrerPolicy = 'no-referrer';
+      img.src = url;
     }
 
     document.getElementById('btnScanQr').onclick = startScan;

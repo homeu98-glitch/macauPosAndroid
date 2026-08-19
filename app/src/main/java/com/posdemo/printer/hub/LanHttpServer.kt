@@ -86,6 +86,8 @@ class LanHttpServer(
             req.method == "GET" && path == "/api/devices" ->
                 json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
             req.method == "GET" && path == "/print" -> handlePrintHtml(req.query)
+            req.method == "GET" && (path == "/beacon" || path == "/beacon.png") ->
+                handlePrintBeacon(req.query)
             req.method == "GET" && path == "/api/print" ->
                 handlePrintJson(req.query["service"].orEmpty(), req.query["ip"].orEmpty(), req.query["title"].orEmpty(), req.query["message"].orEmpty())
             req.method == "POST" && path == "/api/print" -> {
@@ -139,6 +141,16 @@ class LanHttpServer(
         """.trimIndent()
         val accepted = message.isNotBlank() && (service.isNotBlank() || ip.isNotBlank())
         return http(if (accepted) 200 else 400, "text/html; charset=utf-8", html.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun handlePrintBeacon(query: Map<String, String>): ByteArray {
+        runPrint(
+            query["service"].orEmpty(),
+            query["ip"].orEmpty(),
+            query["title"].orEmpty(),
+            query["message"].orEmpty(),
+        )
+        return http(200, "image/png", PIXEL_PNG)
     }
 
     private fun handlePrintJson(service: String, ip: String, title: String, message: String): ByteArray {
@@ -226,6 +238,7 @@ class LanHttpServer(
             append("Access-Control-Allow-Private-Network: true\r\n")
             append("Content-Type: $contentType\r\n")
             append("Content-Length: ${body.size}\r\n")
+            append("Cache-Control: no-store, no-cache\r\n")
             append("Connection: close\r\n")
             append("\r\n")
         }.toByteArray(Charsets.US_ASCII)
@@ -315,5 +328,18 @@ class LanHttpServer(
 
     companion object {
         private const val TAG = "LanHttpServer"
+
+        /** 1x1 透明 PNG，給 HTTPS 頁用隱藏圖片打區網 HTTP（被動 mixed content）。 */
+        private val PIXEL_PNG = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+            0x00, 0x00, 0x00, 0x1F, 0x15.toByte(), 0xC4.toByte(), 0x89.toByte(),
+            0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54,
+            0x78, 0x9C.toByte(), 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
+            0x0D, 0x0A, 0x2D, 0xB4.toByte(),
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE.toByte(), 0x42, 0x60, 0x82.toByte(),
+        )
     }
 }
