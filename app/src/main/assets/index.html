@@ -22,6 +22,13 @@
       font-family: monospace; font-size: 0.95rem; color: var(--ok);
       word-break: break-all; margin: 0 0 4px;
     }
+    .qr-wrap {
+      display: flex; justify-content: center; margin: 8px 0;
+    }
+    #pairQr {
+      display: none; width: 200px; height: 200px;
+      background: #fff; padding: 8px; border-radius: 8px;
+    }
     .hint { color: var(--muted); font-size: 0.75rem; margin: 0; }
     .card {
       background: var(--panel);
@@ -70,8 +77,15 @@
   <div class="card">
     <h2>區網 Hub（離線 Web 列印）</h2>
     <p class="hub-url" id="hubUrl">啟動中…</p>
-    <p class="hint">同一 Wi‑Fi 的手機／電腦用瀏覽器開上面網址即可出單，不需外網。請先掃描並綁定前台／水吧／廚房。</p>
+    <div class="qr-wrap"><img id="pairQr" alt="配對 QR Code" /></div>
+    <p class="hint">用 GitHub 測試頁掃描此 QR 即可配對，也可手動輸入 IP。請先掃描並綁定前台／水吧／廚房。</p>
     <div class="status" id="hubStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Web 送來的指令</h2>
+    <p class="hub-url" id="lastWeb">尚無。從 GitHub 測試頁按前台／水吧／廚房會顯示在這裡。</p>
+    <div class="log" id="webLog"></div>
   </div>
 
   <div class="card">
@@ -138,15 +152,28 @@
         : '本機 IP：無法偵測';
     }
 
+    let lastQrUrl = '';
     function setHub(boot) {
       const el = document.getElementById('hubUrl');
       const st = document.getElementById('hubStatus');
+      const qr = document.getElementById('pairQr');
       if (boot.hubUrl) {
         el.textContent = boot.hubUrl;
         st.textContent = boot.hubListening ? 'Hub 已在聽取' : 'Hub 啟動中…若持續未就緒請允許通知權限';
+        if (boot.hubUrl !== lastQrUrl) {
+          lastQrUrl = boot.hubUrl;
+          try {
+            qr.src = PosNative.getPairQrDataUrl();
+            qr.style.display = 'block';
+          } catch (e) {
+            qr.style.display = 'none';
+          }
+        }
       } else {
         el.textContent = '無法偵測 IP（請連 Wi‑Fi）';
         st.textContent = '';
+        qr.style.display = 'none';
+        lastQrUrl = '';
       }
     }
 
@@ -158,6 +185,22 @@
       div.textContent = '[' + t + '] ' + text;
       box.prepend(div);
     }
+
+    function logWeb(text, warn) {
+      const box = document.getElementById('webLog');
+      const div = document.createElement('div');
+      const t = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+      div.className = warn ? 'warn' : '';
+      div.textContent = '[' + t + '] ' + text;
+      box.prepend(div);
+    }
+
+    window.onWebCommand = (serviceId, label, message, printed) => {
+      const line = '給' + label + '｜' + message;
+      document.getElementById('lastWeb').textContent = line;
+      logWeb(line + (printed > 0 ? '（已出紙）' : '（無印表機，僅記錄）'), printed <= 0);
+      logLine('收到 Web → ' + line, printed <= 0);
+    };
 
     function render(devices) {
       const root = document.getElementById('list');

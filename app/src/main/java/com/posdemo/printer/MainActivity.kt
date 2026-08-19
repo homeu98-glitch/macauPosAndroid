@@ -11,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import com.posdemo.printer.hub.PairQr
 import com.posdemo.printer.hub.PrintHubService
 import com.posdemo.printer.hub.PrinterHub
 import com.posdemo.printer.model.PrinterService
@@ -42,6 +43,18 @@ class MainActivity : ComponentActivity() {
         webView.webViewClient = WebViewClient()
         webView.addJavascriptInterface(Bridge(), "PosNative")
         webView.loadUrl("file:///android_asset/index.html")
+
+        hub.webCommandListener = PrinterHub.WebCommandListener { serviceId, label, message, printed ->
+            evalJs(
+                "onWebCommand(${JSONObject.quote(serviceId)}, ${JSONObject.quote(label)}, " +
+                    "${JSONObject.quote(message)}, $printed)"
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        hub.webCommandListener = null
+        super.onDestroy()
     }
 
     private fun maybeRequestNotifyPermission() {
@@ -66,6 +79,13 @@ class MainActivity : ComponentActivity() {
                 .put("hubListening", hub.listening)
                 .put("devices", hub.devicesJson())
                 .toString()
+        }
+
+        @JavascriptInterface
+        fun getPairQrDataUrl(): String {
+            val ip = scanner.detectLocalIpv4().orEmpty()
+            if (ip.isBlank()) return ""
+            return PairQr.dataUrl("http://$ip:${PrinterHub.PORT}")
         }
 
         @JavascriptInterface

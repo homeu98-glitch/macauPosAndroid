@@ -30,6 +30,13 @@ class PrinterHub private constructor(context: Context) {
     @Volatile
     var listening: Boolean = false
 
+    @Volatile
+    var webCommandListener: WebCommandListener? = null
+
+    fun interface WebCommandListener {
+        fun onWebCommand(serviceId: String, serviceLabel: String, message: String, printed: Int)
+    }
+
     init {
         synchronized(lock) { devices.putAll(store.load()) }
     }

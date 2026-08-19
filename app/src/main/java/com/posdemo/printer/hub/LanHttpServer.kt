@@ -2,6 +2,7 @@ package com.posdemo.printer.hub
 
 import android.content.Context
 import android.util.Log
+import com.posdemo.printer.model.PrinterService
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -35,7 +36,13 @@ class LanHttpServer(
             while (running.get()) {
                 try {
                     val client = ss.accept()
-                    pool.execute { handle(client) }
+                    pool.execute {
+                        try {
+                            handle(client)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "client fatal: ${t.message}", t)
+                        }
+                    }
                 } catch (e: Exception) {
                     if (running.get()) Log.w(TAG, "accept: ${e.message}")
                 }
@@ -61,8 +68,8 @@ class LanHttpServer(
                 val res = route(req)
                 s.getOutputStream().write(res)
                 s.getOutputStream().flush()
-            } catch (e: Exception) {
-                Log.w(TAG, "client: ${e.message}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "client: ${t.message}", t)
             }
         }
     }
@@ -102,49 +109,48 @@ class LanHttpServer(
     }
 
     private fun handlePrintHtml(query: Map<String, String>): ByteArray {
-        val result = runPrint(
-            query["service"].orEmpty(),
-            query["ip"].orEmpty(),
-            query["title"].orEmpty(),
-            query["message"].orEmpty(),
-        )
+        val service = query["service"].orEmpty()
+        val ip = query["ip"].orEmpty()
+        val message = query["message"].orEmpty()
+        val result = runPrint(service, ip, query["title"].orEmpty(), message)
+        val label = serviceLabel(service, ip)
         val logs = result.logs.joinToString("<br>") {
             val color = if (it.warn) "#fbbf24" else "#34d399"
             "<span style=\"color:$color\">${escapeHtml(it.text)}</span>"
         }
-        val title = if (result.printed > 0) "已送到印表機" else "列印失敗"
+        val heading = if (result.printed > 0) "已送到印表機" else "Hub 已收到"
         val html = """
             <!DOCTYPE html>
             <html lang="zh-Hant">
             <head>
               <meta charset="UTF-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>$title</title>
+              <title>$heading</title>
             </head>
             <body style="font-family:sans-serif;background:#0f1419;color:#e8eef6;padding:20px">
-              <h1 style="font-size:1.2rem">$title</h1>
+              <h1 style="font-size:1.2rem">$heading</h1>
+              <p>給 <b>${escapeHtml(label)}</b></p>
+              <p>${escapeHtml(message)}</p>
               <p>$logs</p>
-              <p style="color:#94a3b8;font-size:0.85rem">可關閉此分頁，回到 GitHub 測試頁繼續出單。</p>
-              <p><button onclick="window.close()">關閉</button></p>
+              <p style="color:#94a3b8;font-size:0.85rem">此頁即將自動關閉</p>
+              <script>setTimeout(function(){ window.close(); }, 700);</script>
             </body>
             </html>
         """.trimIndent()
-        val code = if (result.printed > 0) 200 else 502
-        return http(code, "text/html; charset=utf-8", html.toByteArray(Charsets.UTF_8))
+        val accepted = message.isNotBlank() && (service.isNotBlank() || ip.isNotBlank())
+        return http(if (accepted) 200 else 400, "text/html; charset=utf-8", html.toByteArray(Charsets.UTF_8))
     }
 
     private fun handlePrintJson(service: String, ip: String, title: String, message: String): ByteArray {
         val result = runPrint(service, ip, title, message)
         val logs = org.json.JSONArray()
         result.logs.forEach { logs.put(JSONObject().put("text", it.text).put("warn", it.warn)) }
-        val code = when {
-            message.isBlank() || (service.isBlank() && ip.isBlank()) -> 400
-            result.printed > 0 -> 200
-            else -> 502
-        }
+        val accepted = message.isNotBlank() && (service.isNotBlank() || ip.isNotBlank())
+        val code = if (accepted) 200 else 400
         return json(
             JSONObject()
-                .put("ok", result.printed > 0)
+                .put("ok", accepted)
+                .put("received", accepted)
                 .put("printed", result.printed)
                 .put("total", result.total)
                 .put("logs", logs),
@@ -156,14 +162,25 @@ class LanHttpServer(
         if (message.isBlank()) {
             return PrintJobResult(0, 0, listOf(PrintLog("message required", true)))
         }
-        return runBlocking {
+        val result = runBlocking {
             when {
                 ip.isNotBlank() -> hub.printToIp(ip, title.ifBlank { "POS" }, message)
                 service.isNotBlank() -> hub.printService(service, message)
                 else -> PrintJobResult(0, 0, listOf(PrintLog("需要 service 或 ip", true)))
             }
         }
+        val label = serviceLabel(service, ip)
+        try {
+            hub.webCommandListener?.onWebCommand(service.ifBlank { ip }, label, message, result.printed)
+        } catch (e: Exception) {
+            Log.w(TAG, "notify UI: ${e.message}")
+        }
+        return result
     }
+
+    private fun serviceLabel(service: String, ip: String): String =
+        PrinterService.fromId(service)?.label
+            ?: if (ip.isNotBlank()) "IP $ip" else service.ifBlank { "未知" }
 
     private fun escapeHtml(s: String): String = s
         .replace("&", "&amp;")
@@ -239,7 +256,7 @@ class LanHttpServer(
             }
             if (headerBuf.size() > 64 * 1024) return null
         }
-        val headerText = headerBuf.toString(Charset.forName("ISO-8859-1"))
+        val headerText = String(headerBuf.toByteArray(), Charset.forName("ISO-8859-1"))
         val lines = headerText.split("\r\n")
         if (lines.isEmpty()) return null
         val parts = lines[0].split(" ")
