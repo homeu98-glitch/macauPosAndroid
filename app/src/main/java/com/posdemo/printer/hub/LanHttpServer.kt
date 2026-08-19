@@ -1,0 +1,302 @@
+package com.posdemo.printer.hub
+
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URLDecoder
+import java.nio.charset.Charset
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+class LanHttpServer(
+    context: Context,
+    private val port: Int = PrinterHub.PORT,
+) {
+    private val app = context.applicationContext
+    private val hub = PrinterHub.get(app)
+    private val running = AtomicBoolean(false)
+    private var serverSocket: ServerSocket? = null
+    private val pool = Executors.newCachedThreadPool()
+
+    fun start() {
+        if (!running.compareAndSet(false, true)) return
+        val ss = ServerSocket()
+        ss.reuseAddress = true
+        ss.bind(InetSocketAddress("0.0.0.0", port))
+        serverSocket = ss
+        hub.listening = true
+        Thread({
+            while (running.get()) {
+                try {
+                    val client = ss.accept()
+                    pool.execute { handle(client) }
+                } catch (e: Exception) {
+                    if (running.get()) Log.w(TAG, "accept: ${e.message}")
+                }
+            }
+        }, "pos-lan-http").start()
+    }
+
+    fun stop() {
+        running.set(false)
+        hub.listening = false
+        try {
+            serverSocket?.close()
+        } catch (_: Exception) {
+        }
+        serverSocket = null
+    }
+
+    private fun handle(socket: Socket) {
+        socket.soTimeout = 12_000
+        socket.use { s ->
+            try {
+                val req = readRequest(s.getInputStream()) ?: return
+                val res = route(req)
+                s.getOutputStream().write(res)
+                s.getOutputStream().flush()
+            } catch (e: Exception) {
+                Log.w(TAG, "client: ${e.message}")
+            }
+        }
+    }
+
+    private fun route(req: HttpRequest): ByteArray {
+        if (req.method == "OPTIONS") {
+            return http(204, "text/plain", ByteArray(0))
+        }
+        val path = req.path
+        return when {
+            req.method == "GET" && (path == "/" || path == "/remote.html") ->
+                asset("remote.html", "text/html; charset=utf-8")
+            req.method == "GET" && path == "/api/status" -> json(statusJson())
+            req.method == "GET" && path == "/api/devices" ->
+                json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+            req.method == "GET" && path == "/print" -> handlePrintHtml(req.query)
+            req.method == "GET" && path == "/api/print" ->
+                handlePrintJson(req.query["service"].orEmpty(), req.query["ip"].orEmpty(), req.query["title"].orEmpty(), req.query["message"].orEmpty())
+            req.method == "POST" && path == "/api/print" -> {
+                val obj = try {
+                    JSONObject(req.body.ifBlank { "{}" })
+                } catch (_: Exception) {
+                    return json(JSONObject().put("ok", false).put("error", "invalid json"), 400)
+                }
+                handlePrintJson(
+                    obj.optString("service"),
+                    obj.optString("ip"),
+                    obj.optString("title"),
+                    obj.optString("message"),
+                )
+            }
+            else -> json(
+                JSONObject().put("ok", false).put("error", "not found"),
+                404,
+            )
+        }
+    }
+
+    private fun handlePrintHtml(query: Map<String, String>): ByteArray {
+        val result = runPrint(
+            query["service"].orEmpty(),
+            query["ip"].orEmpty(),
+            query["title"].orEmpty(),
+            query["message"].orEmpty(),
+        )
+        val logs = result.logs.joinToString("<br>") {
+            val color = if (it.warn) "#fbbf24" else "#34d399"
+            "<span style=\"color:$color\">${escapeHtml(it.text)}</span>"
+        }
+        val title = if (result.printed > 0) "已送到印表機" else "列印失敗"
+        val html = """
+            <!DOCTYPE html>
+            <html lang="zh-Hant">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>$title</title>
+            </head>
+            <body style="font-family:sans-serif;background:#0f1419;color:#e8eef6;padding:20px">
+              <h1 style="font-size:1.2rem">$title</h1>
+              <p>$logs</p>
+              <p style="color:#94a3b8;font-size:0.85rem">可關閉此分頁，回到 GitHub 測試頁繼續出單。</p>
+              <p><button onclick="window.close()">關閉</button></p>
+            </body>
+            </html>
+        """.trimIndent()
+        val code = if (result.printed > 0) 200 else 502
+        return http(code, "text/html; charset=utf-8", html.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun handlePrintJson(service: String, ip: String, title: String, message: String): ByteArray {
+        val result = runPrint(service, ip, title, message)
+        val logs = org.json.JSONArray()
+        result.logs.forEach { logs.put(JSONObject().put("text", it.text).put("warn", it.warn)) }
+        val code = when {
+            message.isBlank() || (service.isBlank() && ip.isBlank()) -> 400
+            result.printed > 0 -> 200
+            else -> 502
+        }
+        return json(
+            JSONObject()
+                .put("ok", result.printed > 0)
+                .put("printed", result.printed)
+                .put("total", result.total)
+                .put("logs", logs),
+            code,
+        )
+    }
+
+    private fun runPrint(service: String, ip: String, title: String, message: String): PrintJobResult {
+        if (message.isBlank()) {
+            return PrintJobResult(0, 0, listOf(PrintLog("message required", true)))
+        }
+        return runBlocking {
+            when {
+                ip.isNotBlank() -> hub.printToIp(ip, title.ifBlank { "POS" }, message)
+                service.isNotBlank() -> hub.printService(service, message)
+                else -> PrintJobResult(0, 0, listOf(PrintLog("需要 service 或 ip", true)))
+            }
+        }
+    }
+
+    private fun escapeHtml(s: String): String = s
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+
+    private fun statusJson(): JSONObject {
+        val devices = hub.snapshot()
+        return JSONObject()
+            .put("ok", true)
+            .put("listening", hub.listening)
+            .put("port", port)
+            .put("deviceCount", devices.size)
+            .put("bound", devices.count { it.service != null })
+    }
+
+    private fun asset(name: String, contentType: String): ByteArray {
+        return try {
+            http(200, contentType, app.assets.open(name).use { it.readBytes() })
+        } catch (_: Exception) {
+            json(JSONObject().put("ok", false).put("error", "asset missing"), 500)
+        }
+    }
+
+    private fun json(obj: JSONObject, code: Int = 200): ByteArray =
+        http(code, "application/json; charset=utf-8", obj.toString().toByteArray(Charsets.UTF_8))
+
+    private fun http(code: Int, contentType: String, body: ByteArray): ByteArray {
+        val reason = when (code) {
+            200 -> "OK"
+            204 -> "No Content"
+            400 -> "Bad Request"
+            404 -> "Not Found"
+            502 -> "Bad Gateway"
+            else -> "Error"
+        }
+        val head = buildString {
+            append("HTTP/1.1 $code $reason\r\n")
+            append("Access-Control-Allow-Origin: *\r\n")
+            append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
+            append("Access-Control-Allow-Headers: Content-Type, Authorization\r\n")
+            append("Access-Control-Allow-Private-Network: true\r\n")
+            append("Content-Type: $contentType\r\n")
+            append("Content-Length: ${body.size}\r\n")
+            append("Connection: close\r\n")
+            append("\r\n")
+        }.toByteArray(Charsets.US_ASCII)
+        return head + body
+    }
+
+    private fun readRequest(input: InputStream): HttpRequest? {
+        val headerBuf = ByteArrayOutputStream()
+        val window = ByteArray(4)
+        var filled = 0
+        while (true) {
+            val b = input.read()
+            if (b < 0) return null
+            headerBuf.write(b)
+            if (filled < 4) {
+                window[filled++] = b.toByte()
+            } else {
+                window[0] = window[1]
+                window[1] = window[2]
+                window[2] = window[3]
+                window[3] = b.toByte()
+            }
+            if (filled == 4 &&
+                window[0] == '\r'.code.toByte() && window[1] == '\n'.code.toByte() &&
+                window[2] == '\r'.code.toByte() && window[3] == '\n'.code.toByte()
+            ) {
+                break
+            }
+            if (headerBuf.size() > 64 * 1024) return null
+        }
+        val headerText = headerBuf.toString(Charset.forName("ISO-8859-1"))
+        val lines = headerText.split("\r\n")
+        if (lines.isEmpty()) return null
+        val parts = lines[0].split(" ")
+        if (parts.size < 2) return null
+        val method = parts[0].uppercase()
+        val uri = parts[1]
+        val rawPath = uri.substringBefore("?")
+        val query = parseQuery(uri.substringAfter("?", ""))
+        var contentLength = 0
+        for (i in 1 until lines.size) {
+            val line = lines[i]
+            val idx = line.indexOf(':')
+            if (idx <= 0) continue
+            val name = line.substring(0, idx).trim()
+            val value = line.substring(idx + 1).trim()
+            if (name.equals("Content-Length", ignoreCase = true)) {
+                contentLength = value.toIntOrNull() ?: 0
+            }
+        }
+        val body = if (contentLength > 0) {
+            val buf = ByteArray(contentLength)
+            var off = 0
+            while (off < contentLength) {
+                val n = input.read(buf, off, contentLength - off)
+                if (n < 0) break
+                off += n
+            }
+            String(buf, 0, off, Charsets.UTF_8)
+        } else ""
+        return HttpRequest(method, rawPath, query, body)
+    }
+
+    private fun parseQuery(raw: String): Map<String, String> {
+        if (raw.isBlank()) return emptyMap()
+        return raw.split("&").mapNotNull { pair ->
+            if (pair.isEmpty()) return@mapNotNull null
+            val i = pair.indexOf('=')
+            val k = if (i < 0) pair else pair.substring(0, i)
+            val v = if (i < 0) "" else pair.substring(i + 1)
+            decodeComp(k) to decodeComp(v)
+        }.toMap()
+    }
+
+    private fun decodeComp(s: String): String = try {
+        URLDecoder.decode(s.replace("+", "%20"), "UTF-8")
+    } catch (_: Exception) {
+        s
+    }
+
+    private data class HttpRequest(
+        val method: String,
+        val path: String,
+        val query: Map<String, String>,
+        val body: String,
+    )
+
+    companion object {
+        private const val TAG = "LanHttpServer"
+    }
+}

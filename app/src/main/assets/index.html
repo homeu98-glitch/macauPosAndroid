@@ -18,6 +18,11 @@
     }
     h1 { font-size: 1.15rem; margin: 0 0 2px; }
     .local-ip { color: var(--ok); font-size: 0.82rem; font-family: monospace; margin: 0 0 8px; }
+    .hub-url {
+      font-family: monospace; font-size: 0.95rem; color: var(--ok);
+      word-break: break-all; margin: 0 0 4px;
+    }
+    .hint { color: var(--muted); font-size: 0.75rem; margin: 0; }
     .card {
       background: var(--panel);
       border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px;
@@ -61,6 +66,13 @@
 <body>
   <h1>POS 印表機 Demo</h1>
   <p class="local-ip" id="localIp">本機 IP：偵測中…</p>
+
+  <div class="card">
+    <h2>區網 Hub（離線 Web 列印）</h2>
+    <p class="hub-url" id="hubUrl">啟動中…</p>
+    <p class="hint">同一 Wi‑Fi 的手機／電腦用瀏覽器開上面網址即可出單，不需外網。請先掃描並綁定前台／水吧／廚房。</p>
+    <div class="status" id="hubStatus"></div>
+  </div>
 
   <div class="card">
     <h2>區網掃描</h2>
@@ -124,6 +136,18 @@
       document.getElementById('localIp').textContent = ip
         ? '本機 IP：' + ip
         : '本機 IP：無法偵測';
+    }
+
+    function setHub(boot) {
+      const el = document.getElementById('hubUrl');
+      const st = document.getElementById('hubStatus');
+      if (boot.hubUrl) {
+        el.textContent = boot.hubUrl;
+        st.textContent = boot.hubListening ? 'Hub 已在聽取' : 'Hub 啟動中…若持續未就緒請允許通知權限';
+      } else {
+        el.textContent = '無法偵測 IP（請連 Wi‑Fi）';
+        st.textContent = '';
+      }
     }
 
     function logLine(text, warn) {
@@ -221,12 +245,20 @@
       const boot = JSON.parse(PosNative.getBootstrapJson());
       document.getElementById('subnet').value = boot.subnetPrefix || '';
       setLocalIp(boot.localIp || '');
+      setHub(boot);
       render(boot.devices || []);
       const n = (boot.devices || []).length;
       setStatus(n ? ('已還原 ' + n + ' 台') : '就緒');
     } catch (e) {
       setStatus('初始化失敗');
     }
+    setInterval(() => {
+      try {
+        const boot = JSON.parse(PosNative.getBootstrapJson());
+        setLocalIp(boot.localIp || '');
+        setHub(boot);
+      } catch (e) {}
+    }, 2000);
   </script>
 </body>
 </html>

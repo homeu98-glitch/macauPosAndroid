@@ -1,6 +1,9 @@
 package com.posdemo.printer
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -8,32 +11,28 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
-import com.posdemo.printer.data.DeviceStore
-import com.posdemo.printer.model.PrinterDevice
+import com.posdemo.printer.hub.PrintHubService
+import com.posdemo.printer.hub.PrinterHub
 import com.posdemo.printer.model.PrinterService
-import com.posdemo.printer.net.EscPosPrinter
 import com.posdemo.printer.net.LanScanner
-import com.posdemo.printer.net.ScanHit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
-    private lateinit var store: DeviceStore
     private lateinit var scanner: LanScanner
-    private val printer = EscPosPrinter()
-    private val devices = LinkedHashMap<String, PrinterDevice>()
+    private lateinit var hub: PrinterHub
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = DeviceStore(this)
+        hub = PrinterHub.get(this)
         scanner = LanScanner(this)
-        devices.putAll(store.load())
+        maybeRequestNotifyPermission()
+        PrintHubService.start(this)
 
         webView = WebView(this)
         setContentView(webView)
@@ -45,15 +44,27 @@ class MainActivity : ComponentActivity() {
         webView.loadUrl("file:///android_asset/index.html")
     }
 
+    private fun maybeRequestNotifyPermission() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
+    }
+
     private inner class Bridge {
         @JavascriptInterface
         fun getBootstrapJson(): String {
             val localIp = scanner.detectLocalIpv4().orEmpty()
             val prefix = scanner.detectSubnetPrefix().orEmpty()
+            val hubUrl = if (localIp.isBlank()) "" else "http://$localIp:${PrinterHub.PORT}"
             return JSONObject()
                 .put("localIp", localIp)
                 .put("subnetPrefix", prefix.ifEmpty { "192.168.1" })
-                .put("devices", devicesToJson())
+                .put("hubPort", PrinterHub.PORT)
+                .put("hubUrl", hubUrl)
+                .put("hubListening", hub.listening)
+                .put("devices", hub.devicesJson())
                 .toString()
         }
 
@@ -76,15 +87,15 @@ class MainActivity : ComponentActivity() {
                 }
                 var identifyOk = 0
                 hits.forEach { hit ->
-                    mergeHit(hit)
+                    hub.mergeHit(hit)
                     if (identify && 9100 in hit.openPorts) {
                         val body = "IP: ${hit.ip}\nMAC: ${hit.mac ?: "(n/a)"}\nPorts: ${hit.openPorts}"
-                        if (printer.printTextTicket(hit.ip, "DEVICE ID", body).isSuccess) identifyOk++
+                        if (hub.printIdentify(hit.ip, body)) identifyOk++
                     }
                 }
-                store.save(devices)
+                hub.save()
                 evalJs(
-                    "onScanDone(${devicesToJson()}, " +
+                    "onScanDone(${hub.devicesJson()}, " +
                         "'掃描完成：發現 ${hits.size} 台｜識別列印 $identifyOk')"
                 )
             }
@@ -96,134 +107,53 @@ class MainActivity : ComponentActivity() {
                 val hit = withContext(Dispatchers.IO) { scanner.probeIp(ip.trim()) }
                 val service = PrinterService.fromId(serviceId.ifBlank { null })
                 if (hit == null) {
-                    val key = "ip:${ip.trim()}"
-                    devices[key] = PrinterDevice(
-                        key = key,
-                        name = name.ifBlank { "手動-$ip" },
-                        ip = ip.trim(),
-                        mac = null,
-                        openPorts = emptyList(),
-                        service = service,
-                    )
-                    store.save(devices)
-                    evalJs("onDevicesUpdated(${devicesToJson()}, '連不到埠，已先手動保存 $ip')")
+                    hub.putManual(ip.trim(), name, service)
+                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '連不到埠，已先手動保存 ${ip.trim()}')")
                 } else {
-                    mergeHit(hit, name.ifBlank { null }, service)
-                    store.save(devices)
-                    evalJs("onDevicesUpdated(${devicesToJson()}, '已保存 ${hit.ip}')")
+                    hub.mergeHit(hit, name.ifBlank { null }, service)
+                    hub.save()
+                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '已保存 ${hit.ip}')")
                 }
             }
         }
 
         @JavascriptInterface
         fun assignService(key: String, serviceId: String) {
-            val d = devices[key] ?: return
-            devices[key] = d.copy(
-                service = PrinterService.fromId(serviceId.ifBlank { null }),
-                lastSeen = System.currentTimeMillis(),
-            )
-            store.save(devices)
+            hub.assignService(key, serviceId)
             lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${devicesToJson()}, '已綁定服務')")
+                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已綁定服務')")
             }
         }
 
         @JavascriptInterface
         fun removeDevice(key: String) {
-            devices.remove(key)
-            store.save(devices)
+            hub.removeDevice(key)
             lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${devicesToJson()}, '已移除')")
+                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已移除')")
             }
         }
 
         @JavascriptInterface
         fun clearAll() {
-            devices.clear()
-            store.clear()
+            hub.clearAll()
             lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${devicesToJson()}, '已清除全部')")
+                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已清除全部')")
             }
         }
 
         @JavascriptInterface
         fun printService(serviceId: String, message: String) {
-            val service = PrinterService.fromId(serviceId) ?: return
-            val targets = devices.values.filter { it.service == service }
             lifecycleScope.launch {
-                if (targets.isEmpty()) {
-                    evalJs("onPrintLog('沒有綁定「${service.label}」的設備', true)")
-                    return@launch
+                val result = hub.printService(serviceId, message)
+                result.logs.forEach { log ->
+                    evalJs("onPrintLog('${escapeJs(log.text)}', ${log.warn})")
                 }
-                var ok = 0
-                targets.forEach { d ->
-                    if (!d.canRawPrint) {
-                        evalJs("onPrintLog('略過 ${d.ip}：無 9100', true)")
-                        return@forEach
-                    }
-                    val body = "Service: ${service.label}\nIP: ${d.ip}\nMAC: ${d.mac ?: "-"}\n\n$message\n"
-                    val r = printer.printTextTicket(d.ip, service.label, body)
-                    if (r.isSuccess) {
-                        ok++
-                        evalJs("onPrintLog('已列印 → ${service.label} ${d.ip}', false)")
-                    } else {
-                        evalJs(
-                            "onPrintLog('列印失敗 ${d.ip}: ${
-                                (r.exceptionOrNull()?.message ?: "error").replace("'", "")
-                            }', true)"
-                        )
-                    }
-                }
-                evalJs("onPrintLog('「${service.label}」成功 $ok / ${targets.size}', false)")
             }
         }
     }
 
-    private fun mergeHit(
-        hit: ScanHit,
-        preferredName: String? = null,
-        serviceOverride: PrinterService? = null,
-    ) {
-        val mac = hit.mac?.uppercase()
-        val key = mac?.let { "mac:$it" } ?: "ip:${hit.ip}"
-        val oldByIp = devices["ip:${hit.ip}"]
-        val existing = devices[key] ?: oldByIp
-        if (oldByIp != null && key.startsWith("mac:")) devices.remove("ip:${hit.ip}")
-        val name = preferredName
-            ?: existing?.name
-            ?: hit.hostname
-            ?: when {
-                9100 in hit.openPorts -> "Raw9100-${hit.ip.substringAfterLast('.')}"
-                631 in hit.openPorts -> "IPP-${hit.ip.substringAfterLast('.')}"
-                else -> "HTTP-${hit.ip.substringAfterLast('.')}"
-            }
-        devices[key] = PrinterDevice(
-            key = key,
-            name = name,
-            ip = hit.ip,
-            mac = mac ?: existing?.mac,
-            openPorts = hit.openPorts,
-            service = serviceOverride ?: existing?.service,
-            lastSeen = System.currentTimeMillis(),
-        )
-    }
-
-    private fun devicesToJson(): JSONArray {
-        val arr = JSONArray()
-        devices.values.sortedByDescending { it.lastSeen }.forEach { d ->
-            arr.put(
-                JSONObject()
-                    .put("key", d.key)
-                    .put("name", d.name)
-                    .put("ip", d.ip)
-                    .put("mac", d.mac ?: "")
-                    .put("openPorts", JSONArray(d.openPorts))
-                    .put("service", d.service?.id ?: "")
-                    .put("canRawPrint", d.canRawPrint)
-            )
-        }
-        return arr
-    }
+    private fun escapeJs(s: String): String =
+        s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
 
     private fun evalJs(script: String) {
         webView.post { webView.evaluateJavascript(script, null) }

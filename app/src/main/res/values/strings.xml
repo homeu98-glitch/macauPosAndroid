@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">POS Printer Demo</string>
+    <string name="hub_channel">Printer Hub</string>
+    <string name="hub_running">區網列印 Hub 執行中</string>
 </resources>
