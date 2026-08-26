@@ -46,8 +46,13 @@
 </head>
 <body>
   <h1>設定印表機</h1>
-  <p class="hint">此頁由 POS Printer Demo 提供（HTTP）。掃描區網後把設備綁到前台／水吧／廚房，Hub 會記住並負責出單。</p>
-
+  <p class="hint" id="intro">同一 Wi‑Fi 掃描後把設備綁到前台／水吧／廚房。須從點餐頁進入（URL 帶配對碼）。</p>
+  <div class="card" id="noToken" style="display:none;border-color:#7f1d1d">
+    <h2>缺少配對碼</h2>
+    <p class="hint">請先在 Android Hub 掃 QR，或開 <code>/pos?token=…</code> 再按「印表機設定」。</p>
+    <button type="button" class="primary" id="btnBackPos">回到點餐頁</button>
+  </div>
+  <div id="setupBody">
   <div class="card">
     <h2>區網掃描</h2>
     <input id="subnet" placeholder="網段前綴，例如 192.168.31" />
@@ -82,6 +87,7 @@
   <div class="row">
     <button type="button" class="primary" id="btnDone" style="flex:1">完成，回到出單</button>
   </div>
+  </div>
 
   <script>
     const SERVICES = {
@@ -90,7 +96,15 @@
       kitchen: { label: '廚房', cls: 'kitchen' },
     };
     const params = new URLSearchParams(location.search);
-    const returnUrl = params.get('return') || 'https://ericchang1015.github.io/pos-printer-android/print.html';
+    const token = (params.get('token') || localStorage.getItem('hubToken') || '').trim().toUpperCase();
+    if (params.get('token')) localStorage.setItem('hubToken', token);
+    const returnUrl = params.get('return') || ('/pos' + (token ? ('?token=' + encodeURIComponent(token)) : ''));
+
+    if (!token) {
+      document.getElementById('noToken').style.display = 'block';
+      document.getElementById('setupBody').style.display = 'none';
+      document.getElementById('btnBackPos').onclick = () => { location.href = '/pos'; };
+    }
 
     function setStatus(t) { document.getElementById('status').textContent = t; }
 
@@ -99,11 +113,12 @@
     }
 
     async function api(path, body) {
+      const headers = { 'X-Hub-Token': token };
       const opt = body ? {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
         body: JSON.stringify(body),
-      } : {};
+      } : { headers };
       const r = await fetch(path, opt);
       return r.json();
     }
@@ -149,7 +164,13 @@
     }
 
     async function refresh() {
-      const s = await api('/api/status');
+      if (!token) return null;
+      const r = await fetch('/api/status', { headers: { 'X-Hub-Token': token } });
+      if (r.status === 401) {
+        setStatus('配對碼無效，請從點餐頁重新進入');
+        return null;
+      }
+      const s = await r.json();
       if (s.subnetPrefix && !document.getElementById('subnet').value) {
         document.getElementById('subnet').value = s.subnetPrefix;
       }
@@ -181,8 +202,10 @@
     };
     document.getElementById('btnDone').onclick = () => { location.href = returnUrl; };
 
-    refresh();
-    setInterval(refresh, 1500);
+    if (token) {
+      refresh();
+      setInterval(refresh, 1500);
+    }
   </script>
 </body>
 </html>

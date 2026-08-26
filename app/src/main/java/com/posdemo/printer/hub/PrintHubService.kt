@@ -26,7 +26,7 @@ class PrintHubService : Service() {
         val url = if (ip.isNullOrBlank()) {
             "port ${PrinterHub.PORT}"
         } else {
-            "http://$ip:${PrinterHub.PORT}"
+            "http://$ip:${PrinterHub.PORT}/pos"
         }
         startAsForeground(url)
         try {

@@ -1,56 +1,64 @@
-# POS Printer Demo (Android)
+# POS Hub（Android）
 
-對應網頁版 `pos-printer-demo.html` 的實機 Demo：**真實掃區網**，不用 mock。  
-UI 是 WebView；掃描與 TCP 9100 列印由 Android 原生執行。
+店內 **一台 Android** 當 Hub：出點餐頁 + 把單打到 LAN 熱感機（廚房／水吧／前台 `:9100`）。  
+iPad／Android Pad／Windows Pad 用瀏覽器開 Hub 網頁即可，不必各裝 App。
 
-## 功能
+這是由原本印表機 demo 升級的第一刀（HTTP 出頁，尚未做 LAN HTTPS）。
 
-- 自動／手動設定網段（例如 `10.1.2`）
-- 掃描 `.1–.254` 的 **9100 / 631 / 80**
-- 把設備綁到服務：前台／水吧／廚房
-- SharedPreferences 持久化（重開 App 仍在）
-- 對 **TCP 9100** 設備送 ESC/POS 測試頁
-- 可選：掃描時對 9100 設備列印識別頁（IP / MAC）
+## 店裡怎麼用
 
-## 專案結構
+1. 這台 Android 與印表機、點餐平板同一 Wi‑Fi。建議 Hub 與印表機都固定 IP。
+2. 打開 App，前景服務會聽 `http://<HubIP>:8787`。
+3. 手機畫面會顯示 **點餐網址**、**8 位配對碼**、QR。
+4. 平板掃 QR，或瀏覽器開 `http://<HubIP>:8787/pos?token=配對碼`。
+5. 印表機設定：從點餐頁右上角「印表機設定」進入（URL 會帶 token）。掃區網，把機器綁到前台／水吧／廚房。
+6. 點餐頁加菜 → 送出並打印。水吧品出到水吧機，小食品出到廚房機。
 
-```
-app/src/main/
-  assets/index.html          UI
-  java/com/posdemo/printer/
-    MainActivity.kt          WebView + JS Bridge
-    data/DeviceStore.kt      本地儲存
-    model/PrinterDevice.kt   設備與服務
-    net/LanScanner.kt        區網掃描
-    net/EscPosPrinter.kt     TCP 9100 列印
-```
+**iOS 測試逐步說明**：[`docs/ios-testing.md`](docs/ios-testing.md)
+
+沒綁 9100 機器時仍會產生單號，只是不出紙。
+
+## 對平板的意義
+
+| 點餐機 | 要不要裝 App |
+|--------|----------------|
+| iPad / iPhone | 不用。Safari 開 Hub 頁 |
+| Android Pad | 不用（除非這台自己當 Hub） |
+| Windows Pad | 不用。瀏覽器開 Hub 頁，不必 Companion |
+
+Hub 掛了，所有平板都點不了、也印不了。
+
+## HTTP 代價（已知）
+
+點餐頁是明文 `http://HubIP:8787`：沒有 Service Worker／相機通常不可用、同 Wi‑Fi 看得到流量。  
+配對碼擋的是「隨便打 API」，不是加密。之後若要掃券或穩一點，再做 LAN HTTPS。
+
+舊的 GitHub `docs/print.html` + `beacon.png` 仍可用，但 **不要當主路徑**（beacon **不需** token，僅相容舊 demo）。
+
+## API
+
+| 方法 | 路徑 | Token | 說明 |
+|------|------|-------|------|
+| GET | `/` 或 `/pos` | 否 | 點餐頁（建議 URL 帶 `?token=`） |
+| GET | `/setup` | 頁面否；API 要 | 印表機設定（請從點餐頁帶 token 進入） |
+| GET | `/api/health` | 否 | Hub 是否在聽 |
+| GET | `/api/status` | 要 | 設備與綁定 |
+| POST | `/api/ticket` | 要 | `{ lines:[{name,qty,dest}], remark }` → 分區列印 |
+| POST | `/api/print` | 要 | 舊單筆打印 API |
+| GET | `/beacon.png` | **否** | 舊 GitHub Pages demo（勿作主路徑） |
+
+Token：`X-Hub-Token` header、`?token=`，或 JSON body `token`（不分大小寫）。  
+`dest`：`front` / `bar` / `kitchen`。
+
+Version：**1.5.1**（配對閘門、401 清 token、setup 缺碼提示、iOS 測試文件）。
 
 ## 建置
 
-1. 複製 `local.properties.example` 為 `local.properties`，填入本機 Android SDK 路徑
-2. 需要 JDK 17+（建議 JDK 21）
+複製 `local.properties.example` 為 `local.properties`，JDK 17+：
 
 ```bat
 gradlew.bat assembleDebug
-```
-
-APK 輸出：
-
-`app/build/outputs/apk/debug/app-debug.apk`
-
-### 安裝（USB 偵錯）
-
-手機開啟「開發人員選項 → USB 偵錯」，用**數據線**連接後：
-
-```bat
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-也可把 APK 傳到手機直接安裝（需允許未知來源）。
-
-## 測試注意
-
-1. 手機與印表機必須同一 Wi‑Fi／LAN
-2. 廚房熱感機（Epson / Star 等）通常有 **9100**，可直接測列印
-3. Brother 辦公複合機多半只有 80 / IPP，可能掃得到但 9100 列印會失敗
-4. Android 常讀不到區網設備 MAC（ARP 限制），此時以 IP 當鍵；建議印表機固定 IP
+詳見 [`docs/ios-testing.md`](docs/ios-testing.md)。

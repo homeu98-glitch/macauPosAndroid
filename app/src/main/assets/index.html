@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>POS Printer Demo</title>
+  <title>POS Hub</title>
   <style>
     :root {
       --bg: #0f1419; --panel: #1a222c; --panel2: #232d3a; --line: #334155;
@@ -51,14 +51,16 @@
   </style>
 </head>
 <body>
-  <h1>POS 印表機 Demo</h1>
+  <h1>POS Hub</h1>
   <p class="local-ip" id="localIp">本機 IP：偵測中…</p>
 
   <div class="card">
-    <h2>區網 Hub</h2>
+    <h2>區網 Hub · 點餐頁</h2>
     <p class="hub-url" id="hubUrl">啟動中…</p>
-    <div class="qr-wrap"><img id="pairQr" alt="配對 QR Code" /></div>
-    <p class="hint">手機打開 GitHub 測試頁掃描此 QR。設定印表機會導向本機網頁；出單由 Hub 依綁定分送。</p>
+    <p class="hub-url" id="posUrl"></p>
+    <p class="hint" id="hubToken"></p>
+    <div class="qr-wrap"><img id="pairQr" alt="點餐頁 QR" /></div>
+    <p class="hint">iPad／Android／Windows 用瀏覽器掃 QR，或開上面網址（同一 Wi‑Fi）。印表機設定：點餐頁內「印表機設定」（須帶 token）。</p>
     <div class="status" id="hubStatus"></div>
   </div>
 
@@ -90,10 +92,13 @@
       const st = document.getElementById('hubStatus');
       const qr = document.getElementById('pairQr');
       if (boot.hubUrl) {
-        el.textContent = boot.hubUrl;
-        st.textContent = boot.hubListening ? 'Hub 已在聽取' : 'Hub 啟動中…';
-        if (boot.hubUrl !== lastQrUrl) {
-          lastQrUrl = boot.hubUrl;
+        el.textContent = 'Hub ' + boot.hubUrl;
+        document.getElementById('posUrl').textContent = boot.posUrl || '';
+        document.getElementById('hubToken').textContent = boot.hubToken ? ('配對碼 ' + boot.hubToken) : '';
+        st.textContent = boot.hubListening ? 'Hub 已在聽取 · 點餐頁已開' : 'Hub 啟動中…';
+        const qrText = boot.posUrl || boot.hubUrl;
+        if (qrText !== lastQrUrl) {
+          lastQrUrl = qrText;
           try {
             qr.src = PosNative.getPairQrDataUrl();
             qr.style.display = 'block';

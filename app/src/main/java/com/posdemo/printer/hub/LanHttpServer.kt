@@ -2,8 +2,10 @@ package com.posdemo.printer.hub
 
 import android.content.Context
 import android.util.Log
+import com.posdemo.printer.data.HubAuth
 import com.posdemo.printer.model.PrinterService
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -21,6 +23,7 @@ class LanHttpServer(
 ) {
     private val app = context.applicationContext
     private val hub = PrinterHub.get(app)
+    private val auth = HubAuth(app)
     private val assembleLock = Any()
     private val assembleJobs = LinkedHashMap<String, AssembleJob>()
     private val running = AtomicBoolean(false)
@@ -82,26 +85,43 @@ class LanHttpServer(
         }
         val path = req.path
         return when {
-            req.method == "GET" && (path == "/" || path == "/setup.html" || path == "/setup" || path == "/remote.html") ->
+            req.method == "GET" && (path == "/" || path == "/pos" || path == "/pos.html") ->
+                asset("pos.html", "text/html; charset=utf-8")
+            req.method == "GET" && (path == "/setup.html" || path == "/setup" || path == "/remote.html") ->
                 asset("setup.html", "text/html; charset=utf-8")
-            req.method == "GET" && path == "/api/status" -> json(statusJson())
+            req.method == "GET" && path == "/api/health" -> json(
+                JSONObject().put("ok", true).put("hubUrl", hub.hubUrl()).put("posPath", "/pos"),
+            )
+            req.method == "GET" && path == "/api/status" ->
+                if (!authorized(req)) deny() else json(statusJson())
             req.method == "GET" && path == "/api/devices" ->
-                json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
-            req.method == "GET" && path == "/api/scan" -> json(scanJson())
-            req.method == "POST" && path == "/api/scan" -> handlePostScan(req)
-            req.method == "POST" && path == "/api/assign" -> handlePostAssign(req)
-            req.method == "POST" && path == "/api/manual" -> handlePostManual(req)
-            req.method == "POST" && path == "/api/remove" -> handlePostRemove(req)
+                if (!authorized(req)) deny() else json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+            req.method == "GET" && path == "/api/scan" ->
+                if (!authorized(req)) deny() else json(scanJson())
+            req.method == "POST" && path == "/api/scan" ->
+                if (!authorized(req)) deny() else handlePostScan(req)
+            req.method == "POST" && path == "/api/assign" ->
+                if (!authorized(req)) deny() else handlePostAssign(req)
+            req.method == "POST" && path == "/api/manual" ->
+                if (!authorized(req)) deny() else handlePostManual(req)
+            req.method == "POST" && path == "/api/remove" ->
+                if (!authorized(req)) deny() else handlePostRemove(req)
             req.method == "POST" && path == "/api/clear" -> {
-                hub.clearAll()
-                json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+                if (!authorized(req)) deny()
+                else {
+                    hub.clearAll()
+                    json(JSONObject().put("ok", true).put("devices", hub.devicesJson()))
+                }
             }
+            req.method == "POST" && path == "/api/ticket" -> handlePostTicket(req)
             req.method == "GET" && path == "/print" -> handlePrintHtml(req.query)
             req.method == "GET" && (path == "/beacon" || path == "/beacon.png") ->
                 handlePrintBeacon(req.query)
             req.method == "GET" && path == "/api/print" ->
-                handlePrintJson(req.query["service"].orEmpty(), req.query["ip"].orEmpty(), req.query["title"].orEmpty(), req.query["message"].orEmpty())
-            req.method == "POST" && path == "/api/print" -> handlePostPrint(req)
+                if (!authorized(req)) deny()
+                else handlePrintJson(req.query["service"].orEmpty(), req.query["ip"].orEmpty(), req.query["title"].orEmpty(), req.query["message"].orEmpty())
+            req.method == "POST" && path == "/api/print" ->
+                if (!authorized(req)) deny() else handlePostPrint(req)
             else -> json(
                 JSONObject().put("ok", false).put("error", "not found"),
                 404,
@@ -222,6 +242,73 @@ class LanHttpServer(
         )
     }
 
+    private fun handlePostTicket(req: HttpRequest): ByteArray {
+        if (!authorized(req)) return deny()
+        if (req.tooLarge) {
+            return json(JSONObject().put("ok", false).put("error", "payload too large"), 413)
+        }
+        val obj = try {
+            JSONObject(req.body.ifBlank { "{}" })
+        } catch (_: Exception) {
+            return json(JSONObject().put("ok", false).put("error", "invalid json"), 400)
+        }
+        val lines = obj.optJSONArray("lines")
+        if (lines == null || lines.length() == 0) {
+            return json(JSONObject().put("ok", false).put("error", "lines required"), 400)
+        }
+        val remark = obj.optString("remark").trim()
+        val grouped = LinkedHashMap<String, MutableList<String>>()
+        for (i in 0 until lines.length()) {
+            val line = lines.optJSONObject(i) ?: continue
+            val name = line.optString("name").trim()
+            val qty = line.optInt("qty", 1).coerceIn(1, 99)
+            val dest = PrinterService.fromId(line.optString("dest").ifBlank { "kitchen" })?.id ?: "kitchen"
+            if (name.isBlank()) continue
+            grouped.getOrPut(dest) { ArrayList() }.add("$name  x$qty")
+        }
+        if (grouped.isEmpty()) {
+            return json(JSONObject().put("ok", false).put("error", "no valid lines"), 400)
+        }
+        val ticketNo = auth.nextTicketNo()
+        val title = "單 #$ticketNo"
+        var printed = 0
+        var total = 0
+        val logs = JSONArray()
+        grouped.forEach { (dest, items) ->
+            val body = buildString {
+                items.forEach { append(it).append('\n') }
+                if (remark.isNotBlank()) append('\n').append("備註: ").append(remark)
+            }
+            val result = runPrint(dest, "", title, body)
+            printed += result.printed
+            total += result.total
+            result.logs.forEach { logs.put(JSONObject().put("text", it.text).put("warn", it.warn)) }
+        }
+        return json(
+            JSONObject()
+                .put("ok", true)
+                .put("ticketNo", ticketNo)
+                .put("printed", printed)
+                .put("total", total)
+                .put("logs", logs),
+        )
+    }
+
+    private fun authorized(req: HttpRequest): Boolean {
+        val fromHeader = req.headers["x-hub-token"]
+            ?: req.headers["authorization"]?.removePrefix("Bearer ")?.trim()
+        val fromQuery = req.query["token"]
+        val fromBody = try {
+            if (req.body.contains("\"token\"")) JSONObject(req.body).optString("token") else ""
+        } catch (_: Exception) {
+            ""
+        }
+        return auth.matches(fromHeader) || auth.matches(fromQuery) || auth.matches(fromBody)
+    }
+
+    private fun deny(): ByteArray =
+        json(JSONObject().put("ok", false).put("error", "token required"), 401)
+
     private fun parsePostFields(req: HttpRequest): Map<String, String>? {
         val ct = req.contentType.lowercase()
         return try {
@@ -337,6 +424,7 @@ class LanHttpServer(
             .put("localIp", hub.localIp())
             .put("subnetPrefix", hub.subnetPrefix().ifBlank { "192.168.1" })
             .put("hubUrl", hub.hubUrl())
+            .put("posUrl", hub.posUrl(auth.token()))
             .put("scanRunning", hub.scanRunning)
             .put("scanMessage", hub.scanMessage)
             .put("deviceCount", devices.size)
@@ -360,7 +448,9 @@ class LanHttpServer(
             200 -> "OK"
             204 -> "No Content"
             400 -> "Bad Request"
+            401 -> "Unauthorized"
             409 -> "Conflict"
+            413 -> "Payload Too Large"
             502 -> "Bad Gateway"
             else -> "Error"
         }
@@ -368,7 +458,7 @@ class LanHttpServer(
             append("HTTP/1.1 $code $reason\r\n")
             append("Access-Control-Allow-Origin: *\r\n")
             append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
-            append("Access-Control-Allow-Headers: Content-Type, Authorization\r\n")
+            append("Access-Control-Allow-Headers: Content-Type, Authorization, X-Hub-Token\r\n")
             append("Access-Control-Allow-Private-Network: true\r\n")
             append("Content-Type: $contentType\r\n")
             append("Content-Length: ${body.size}\r\n")
@@ -414,20 +504,22 @@ class LanHttpServer(
         val query = parseQuery(uri.substringAfter("?", ""))
         var contentLength = 0
         var contentType = ""
+        val headers = HashMap<String, String>()
         for (i in 1 until lines.size) {
             val line = lines[i]
             val idx = line.indexOf(':')
             if (idx <= 0) continue
-            val name = line.substring(0, idx).trim()
+            val name = line.substring(0, idx).trim().lowercase()
             val value = line.substring(idx + 1).trim()
-            if (name.equals("Content-Length", ignoreCase = true)) {
+            headers[name] = value
+            if (name == "content-length") {
                 contentLength = value.toIntOrNull() ?: 0
-            } else if (name.equals("Content-Type", ignoreCase = true)) {
+            } else if (name == "content-type") {
                 contentType = value
             }
         }
         if (contentLength > MAX_BODY) {
-            return HttpRequest(method, rawPath, query, "", contentType, tooLarge = true)
+            return HttpRequest(method, rawPath, query, "", contentType, headers, tooLarge = true)
         }
         val body = if (contentLength > 0) {
             val buf = ByteArray(contentLength)
@@ -439,7 +531,7 @@ class LanHttpServer(
             }
             String(buf, 0, off, Charsets.UTF_8)
         } else ""
-        return HttpRequest(method, rawPath, query, body, contentType, tooLarge = false)
+        return HttpRequest(method, rawPath, query, body, contentType, headers, tooLarge = false)
     }
 
     private fun parseQuery(raw: String): Map<String, String> {
@@ -465,6 +557,7 @@ class LanHttpServer(
         val query: Map<String, String>,
         val body: String,
         val contentType: String = "",
+        val headers: Map<String, String> = emptyMap(),
         val tooLarge: Boolean = false,
     )
 

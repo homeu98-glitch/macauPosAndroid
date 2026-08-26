@@ -11,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import com.posdemo.printer.data.HubAuth
 import com.posdemo.printer.hub.PairQr
 import com.posdemo.printer.hub.PrintHubService
 import com.posdemo.printer.hub.PrinterHub
@@ -25,11 +26,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var scanner: LanScanner
     private lateinit var hub: PrinterHub
+    private lateinit var auth: HubAuth
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hub = PrinterHub.get(this)
+        auth = HubAuth(this)
         scanner = LanScanner(this)
         maybeRequestNotifyPermission()
         PrintHubService.start(this)
@@ -69,12 +72,16 @@ class MainActivity : ComponentActivity() {
         fun getBootstrapJson(): String {
             val localIp = scanner.detectLocalIpv4().orEmpty()
             val prefix = scanner.detectSubnetPrefix().orEmpty()
+            val token = auth.token()
             val hubUrl = if (localIp.isBlank()) "" else "http://$localIp:${PrinterHub.PORT}"
+            val posUrl = if (hubUrl.isBlank()) "" else "$hubUrl/pos?token=$token"
             return JSONObject()
                 .put("localIp", localIp)
                 .put("subnetPrefix", prefix.ifEmpty { "192.168.1" })
                 .put("hubPort", PrinterHub.PORT)
                 .put("hubUrl", hubUrl)
+                .put("posUrl", posUrl)
+                .put("hubToken", token)
                 .put("hubListening", hub.listening)
                 .put("devices", hub.devicesJson())
                 .toString()
@@ -84,7 +91,7 @@ class MainActivity : ComponentActivity() {
         fun getPairQrDataUrl(): String {
             val ip = scanner.detectLocalIpv4().orEmpty()
             if (ip.isBlank()) return ""
-            return PairQr.dataUrl("http://$ip:${PrinterHub.PORT}")
+            return PairQr.dataUrl(hub.posUrl(auth.token()))
         }
 
         @JavascriptInterface

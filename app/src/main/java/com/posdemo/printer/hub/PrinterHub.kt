@@ -107,6 +107,11 @@ class PrinterHub private constructor(context: Context) {
         return if (ip.isBlank()) "" else "http://$ip:$PORT"
     }
 
+    fun posUrl(token: String): String {
+        val base = hubUrl()
+        return if (base.isBlank()) "" else "$base/pos?token=$token"
+    }
+
     fun snapshot(): List<PrinterDevice> = synchronized(lock) { devices.values.toList() }
 
     fun devicesJson(): JSONArray {

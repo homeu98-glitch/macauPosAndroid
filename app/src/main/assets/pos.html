@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>店內點餐</title>
+  <style>
+    :root {
+      --bg: #121212; --panel: #1c1c1c; --line: #333; --text: #eee; --muted: #8a8a8a;
+      --accent: #c4a574; --ok: #7dcea0; --warn: #d4b06a; --no: #d98989;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+    }
+    header {
+      padding: 12px 16px; border-bottom: 1px solid var(--line);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    h1 { font-size: 1.1rem; margin: 0; font-weight: 650; }
+    .muted { color: var(--muted); font-size: 0.8rem; }
+    .ok { color: var(--ok); } .no { color: var(--no); }
+    main {
+      display: grid; grid-template-columns: 1.4fr 1fr; min-height: calc(100vh - 52px);
+    }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+    .menu { padding: 12px 16px 24px; }
+    .cart {
+      padding: 12px 16px 24px; border-left: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h2 { font-size: 0.85rem; color: var(--muted); margin: 16px 0 8px; font-weight: 550; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    button.item, button.qty, button.send, button.clear, button.gate {
+      appearance: none; border: 1px solid var(--line); background: #242424;
+      color: var(--text); border-radius: 8px; padding: 14px 10px; font-size: 1rem;
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    }
+    button.item { text-align: left; min-height: 72px; }
+    button.item small { display: block; color: var(--muted); font-size: 0.75rem; margin-top: 4px; }
+    button.item:active, button.send:active { background: #2e2e2e; }
+    button.send {
+      width: 100%; background: var(--accent); color: #1a140c; border: 0;
+      font-weight: 700; padding: 16px; font-size: 1.05rem; margin-top: 10px;
+    }
+    button.send:disabled { opacity: 0.45; }
+    button.clear { width: 100%; margin-top: 8px; color: var(--muted); }
+    .line {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-bottom: 1px solid var(--line); gap: 8px;
+    }
+    .qty { display: flex; gap: 6px; align-items: center; }
+    button.qty { padding: 8px 12px; min-width: 40px; }
+    input, textarea, select {
+      width: 100%; background: #242424; border: 1px solid var(--line);
+      color: var(--text); border-radius: 8px; padding: 10px; font-size: 1rem;
+    }
+    textarea { min-height: 64px; resize: vertical; }
+    .gate {
+      position: fixed; inset: 0; background: var(--bg); display: none;
+      align-items: center; justify-content: center; padding: 24px;
+    }
+    .gate.on { display: flex; }
+    .gate-panel { width: min(420px, 100%); }
+    .log { font-size: 0.8rem; color: var(--muted); margin-top: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>店內點餐</h1>
+      <div class="muted" id="hubHint">連接 Hub 中…</div>
+    </div>
+    <a class="muted" href="/setup" id="setupLink">印表機設定</a>
+  </header>
+  <main>
+    <section class="menu">
+      <h2>飲品 · 水吧</h2>
+      <div class="grid" id="bar"></div>
+      <h2>小食 · 廚房</h2>
+      <div class="grid" id="kitchen"></div>
+      <h2>自訂</h2>
+      <div style="display:grid;grid-template-columns:1fr 120px 88px;gap:8px">
+        <input id="customName" placeholder="品名" />
+        <select id="customDest">
+          <option value="kitchen">廚房</option>
+          <option value="bar">水吧</option>
+          <option value="front">前台</option>
+        </select>
+        <button class="item" type="button" id="btnCustom" style="min-height:44px;padding:10px;text-align:center">加入</button>
+      </div>
+    </section>
+    <aside class="cart">
+      <h2>本單</h2>
+      <div id="lines"></div>
+      <p class="muted" id="empty">尚未加菜</p>
+      <label class="muted" for="remark">備註</label>
+      <textarea id="remark" placeholder="少冰、走甜…"></textarea>
+      <button class="send" type="button" id="btnSend" disabled>送出並打印</button>
+      <button class="clear" type="button" id="btnClear">清空</button>
+      <div class="log" id="log"></div>
+    </aside>
+  </main>
+  <div class="gate" id="gate">
+    <div class="gate-panel">
+      <h1>輸入 Hub 配對碼</h1>
+      <p class="muted">在 Android Hub 畫面或通知上的 8 位碼。iPad／iPhone 須與 Hub 同一 Wi‑Fi。</p>
+      <input id="tokenInput" autocomplete="off" autocapitalize="characters" maxlength="16" placeholder="例如 AB3K7M2P" />
+      <button class="gate" type="button" id="btnGate" style="width:100%;margin-top:12px;padding:14px">進入</button>
+    </div>
+  </div>
+  <script>
+    const MENU = {
+      bar: [
+        { name: "凍檸茶", dest: "bar" },
+        { name: "熱咖啡", dest: "bar" },
+        { name: "奶茶", dest: "bar" },
+        { name: "凍檸水", dest: "bar" },
+      ],
+      kitchen: [
+        { name: "薯條", dest: "kitchen" },
+        { name: "雞翼", dest: "kitchen" },
+        { name: "炒飯", dest: "kitchen" },
+        { name: "多士", dest: "kitchen" },
+      ],
+    };
+    const DEST = { front: "前台", bar: "水吧", kitchen: "廚房" };
+    const params = new URLSearchParams(location.search);
+    let token = (params.get("token") || localStorage.getItem("hubToken") || "").trim().toUpperCase();
+    if (params.get("token")) localStorage.setItem("hubToken", token);
+
+    function showGate(msg) {
+      gate.classList.add("on");
+      if (msg) log(msg, true);
+    }
+    function hideGate() {
+      gate.classList.remove("on");
+    }
+    function invalidateToken(msg) {
+      token = "";
+      localStorage.removeItem("hubToken");
+      renderCart();
+      showGate(msg || "配對碼無效，請重新輸入");
+    }
+    const cart = [];
+    const gate = document.getElementById("gate");
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderMenu() {
+      for (const dest of ["bar", "kitchen"]) {
+        document.getElementById(dest).innerHTML = MENU[dest].map((it) => (
+          '<button type="button" class="item" data-name="' + escapeHtml(it.name) + '" data-dest="' + it.dest + '">' +
+          escapeHtml(it.name) + "<small>" + DEST[it.dest] + "</small></button>"
+        )).join("");
+      }
+    }
+    function renderCart() {
+      const box = document.getElementById("lines");
+      document.getElementById("empty").style.display = cart.length ? "none" : "block";
+      document.getElementById("btnSend").disabled = !cart.length || !token;
+      box.innerHTML = cart.map((l, i) => (
+        '<div class="line"><div>' + escapeHtml(l.name) +
+        '<div class="muted">' + (DEST[l.dest] || l.dest) + '</div></div>' +
+        '<div class="qty"><button type="button" class="qty" data-i="' + i + '" data-d="-1">−</button>' +
+        "<span>" + l.qty + "</span>" +
+        '<button type="button" class="qty" data-i="' + i + '" data-d="1">+</button></div></div>'
+      )).join("");
+    }
+    function addItem(name, dest) {
+      const hit = cart.find((l) => l.name === name && l.dest === dest);
+      if (hit) hit.qty += 1;
+      else cart.push({ name, dest, qty: 1 });
+      renderCart();
+    }
+    function log(text, bad) {
+      const el = document.getElementById("log");
+      el.style.color = bad ? "var(--no)" : "var(--ok)";
+      el.textContent = text;
+    }
+    async function refreshStatus() {
+      if (!token) return;
+      try {
+        const r = await fetch("/api/status", { headers: { "X-Hub-Token": token } });
+        if (r.status === 401) {
+          invalidateToken("配對碼已失效");
+          return;
+        }
+        const j = await r.json();
+        const bound = (j.devices || []).filter((d) => d.service && d.canRawPrint);
+        const parts = bound.map((d) => DEST[d.service] || d.service);
+        document.getElementById("hubHint").textContent = parts.length
+          ? ("已接 " + parts.join("、") + " · " + (j.localIp || ""))
+          : "尚未綁定 9100 印表機，送出只會記單";
+        document.getElementById("setupLink").href = "/setup?token=" + encodeURIComponent(token);
+      } catch (e) {
+        document.getElementById("hubHint").textContent = "連不到 Hub（確認同一 Wi‑Fi）";
+      }
+    }
+    document.querySelector(".menu").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button.item");
+      if (!btn || !btn.dataset.name) return;
+      addItem(btn.dataset.name, btn.dataset.dest);
+    });
+    document.getElementById("btnCustom").onclick = () => {
+      const name = document.getElementById("customName").value.trim();
+      if (!name) return;
+      addItem(name, document.getElementById("customDest").value);
+      document.getElementById("customName").value = "";
+    };
+    document.getElementById("lines").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button.qty");
+      if (!btn) return;
+      const i = Number(btn.dataset.i);
+      const d = Number(btn.dataset.d);
+      cart[i].qty += d;
+      if (cart[i].qty <= 0) cart.splice(i, 1);
+      renderCart();
+    });
+    document.getElementById("btnClear").onclick = () => { cart.length = 0; renderCart(); log(""); };
+    document.getElementById("btnSend").onclick = async () => {
+      if (!cart.length || !token) return;
+      const btn = document.getElementById("btnSend");
+      btn.disabled = true;
+      log("送出中…");
+      try {
+        const r = await fetch("/api/ticket", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Hub-Token": token },
+          body: JSON.stringify({
+            lines: cart.map((l) => ({ name: l.name, qty: l.qty, dest: l.dest })),
+            remark: document.getElementById("remark").value.trim(),
+          }),
+        });
+        if (r.status === 401) {
+          invalidateToken("配對碼已失效");
+          btn.disabled = false;
+          return;
+        }
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          log(j.error || ("失敗 " + r.status), true);
+          btn.disabled = false;
+          return;
+        }
+        log("單 #" + j.ticketNo + " 已送出 · 印了 " + j.printed + "/" + j.total);
+        cart.length = 0;
+        document.getElementById("remark").value = "";
+        renderCart();
+      } catch (e) {
+        log("送出失敗：" + (e.message || e), true);
+        btn.disabled = false;
+      }
+    };
+    document.getElementById("btnGate").onclick = () => {
+      token = document.getElementById("tokenInput").value.trim().toUpperCase();
+      if (token.length < 4) return;
+      localStorage.setItem("hubToken", token);
+      hideGate();
+      log("");
+      renderCart();
+      refreshStatus();
+    };
+    document.getElementById("setupLink").href = token
+      ? ("/setup?token=" + encodeURIComponent(token))
+      : "/setup";
+    renderMenu();
+    renderCart();
+    if (!token) showGate();
+    else { hideGate(); refreshStatus(); }
+    setInterval(refreshStatus, 8000);
+  </script>
+</body>
+</html>
