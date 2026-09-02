@@ -165,7 +165,25 @@ class LanHttpServer(
             val color = if (it.warn) "#fbbf24" else "#34d399"
             "<span style=\"color:$color\">${escapeHtml(it.text)}</span>"
         }
-        val heading = if (result.printed > 0) "已送到印表機" else "Hub 已收到"
+        // 失敗嗰陣唔好自動閂：700ms 根本睇唔到寫乜，等同冇講原因。
+        // 印到嘢先自動閂；印唔到就留低個頁畀店員睇清楚邊度衰。
+        val printed = result.printed > 0
+        val heading = when {
+            printed -> "已送到印表機"
+            result.total > 0 -> "列印失敗"
+            else -> "Hub 已收到"
+        }
+        val headingColor = if (printed) "#34d399" else "#fbbf24"
+        val footer = if (printed) {
+            "此頁即將自動關閉"
+        } else {
+            "此頁唔會自動關閉 —— 睇完上面嘅原因再手動閂"
+        }
+        val script = if (printed) {
+            "<script>setTimeout(function(){ window.close(); }, 700);</script>"
+        } else {
+            ""
+        }
         val html = """
             <!DOCTYPE html>
             <html lang="zh-Hant">
@@ -175,12 +193,12 @@ class LanHttpServer(
               <title>$heading</title>
             </head>
             <body style="font-family:sans-serif;background:#0f1419;color:#e8eef6;padding:20px">
-              <h1 style="font-size:1.2rem">$heading</h1>
+              <h1 style="font-size:1.2rem;color:$headingColor">$heading</h1>
               <p>給 <b>${escapeHtml(label)}</b></p>
               <p>${escapeHtml(message)}</p>
               <p>$logs</p>
-              <p style="color:#94a3b8;font-size:0.85rem">此頁即將自動關閉</p>
-              <script>setTimeout(function(){ window.close(); }, 700);</script>
+              <p style="color:#94a3b8;font-size:0.85rem">$footer</p>
+              $script
             </body>
             </html>
         """.trimIndent()
