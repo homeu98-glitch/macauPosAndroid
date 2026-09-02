@@ -3,6 +3,7 @@ package com.macau.pos.printagent.relay
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -46,6 +47,8 @@ class RelayActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private lateinit var tvStatus: TextView
+    /** 最近一次列印失敗嘅原因。紅字、獨立一行：淨係靠「失敗 N 張」係追唔到嘢嘅。 */
+    private lateinit var tvLastError: TextView
     private lateinit var pairingHint: TextView
     private lateinit var etStoreId: EditText
     private lateinit var btnPair: Button
@@ -99,6 +102,15 @@ class RelayActivity : ComponentActivity() {
             setLineSpacing(0f, 1.25f)
         }
         root.addView(tvStatus)
+
+        tvLastError = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(0, 0, 0, dp(12))
+            setLineSpacing(0f, 1.25f)
+            setTextColor(Color.parseColor("#FF6B6B"))
+            visibility = android.view.View.GONE
+        }
+        root.addView(tvLastError)
 
         pairingHint = TextView(this).apply {
             text = "手動配對：喺 web POS「設置 → 打印機」複製本店店舖 ID，貼落下面，撳「配對」。"
@@ -207,6 +219,16 @@ class RelayActivity : ComponentActivity() {
             append("上次認領：${ago(RelayState.lastClaimAt)}　上次心跳：${ago(RelayState.lastHeartbeatAt)}\n")
             append("上次叫醒：${ago(RelayState.lastWakeAt)}\n")
             if (RelayState.lastMessage.isNotBlank()) append("訊息：${RelayState.lastMessage}")
+        }
+
+        // 失敗原因一定要睇得到：否則用戶淨係見到「失敗 1 張」，完全無從追查。
+        val printErr = RelayState.lastPrintError
+        if (printErr.isNotBlank()) {
+            val agoErr = if (RelayState.lastPrintErrorAt == 0L) "" else "（${ago(RelayState.lastPrintErrorAt)}）"
+            tvLastError.text = "⚠ 上次列印失敗$agoErr\n$printErr"
+            tvLastError.visibility = android.view.View.VISIBLE
+        } else {
+            tvLastError.visibility = android.view.View.GONE
         }
 
         pairingHint.visibility = if (paired) android.view.View.GONE else android.view.View.VISIBLE

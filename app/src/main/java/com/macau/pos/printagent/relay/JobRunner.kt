@@ -63,6 +63,15 @@ object JobRunner {
                 failed++
                 RelayState.failedCount++
                 Log.w(TAG, "列印失敗 $jobId：$err")
+                // 一定要寫低原因：否則用戶淨係見到「失敗 N 張」，完全無從追查。
+                RelayState.lastPrintError = buildString {
+                    append(row.optString("orderNo").takeIf { it.isNotBlank() } ?: jobId)
+                    append(" → ")
+                    append(printerLabelOf(row))
+                    append("：")
+                    append(err ?: "未知錯誤")
+                }
+                RelayState.lastPrintErrorAt = System.currentTimeMillis()
             }
             api.report(
                 baseUrl, agentId, token, jobId,
@@ -72,6 +81,16 @@ object JobRunner {
         }
         DrainResult(res.jobs.size, sent, failed, null)
     }
+
+    /**
+     * 由 job row 度搵出目標打印機名，淨係畀錯誤訊息顯示用。
+     * 次序同 resolvePrinter() 一致：server 快照 printer.name → printer_name → printer_id。
+     */
+    private fun printerLabelOf(row: JSONObject): String =
+        row.optJSONObject("printer")?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: row.optString("printer_name").takeIf { it.isNotBlank() }
+            ?: row.optString("printer_id").takeIf { it.isNotBlank() }
+            ?: "(未能解析打印機)"
 
     /** 印一張；成功返 true，失敗拲 exception（caller 會轉做 failed + last_error）。 */
     private suspend fun printOne(

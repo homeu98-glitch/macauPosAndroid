@@ -33,6 +33,17 @@ object RelayState {
     @Volatile
     var lastMessage: String = ""
 
+    /**
+     * 最近一次「列印失敗」嘅原因。
+     * 冇咗呢個，用戶淨係見到「失敗 1 張」但完全唔知衰邊度（同 Print Hub 當初嘅 bug 一樣）。
+     * 同 lastMessage 分開：lastMessage 係連線/配對狀態用，唔好互相蓋住。
+     */
+    @Volatile
+    var lastPrintError: String = ""
+
+    @Volatile
+    var lastPrintErrorAt: Long = 0L
+
     @Volatile
     var sunmiReady: Boolean = false
 
@@ -55,5 +66,7 @@ object RelayState {
         printedCount = 0
         failedCount = 0
         lastMessage = ""
+        lastPrintError = ""
+        lastPrintErrorAt = 0L
     }
 }
