@@ -17,8 +17,11 @@ android {
         // → 配對流程改變，必須 bump（source 改完唔等於生效：要 rebuild APK + 重新派版）
         // 2026-09-02：修 SdkPrinter.connect() 無 timeout 永久掛起（同 Print Hub v1.1.2 同一個 bug）
         // + LAN 打印機改行 raw socket 優先（5s timeout），失敗先 fallback 廠商 SDK。
-        versionCode = 7
-        versionName = "1.1.2"
+        // v1.1.3：補「失敗原因要睇得到」——① 雲端中繼失敗寫低原因 + Activity 紅字顯示
+        // ② 常駐通知帶埋原因 + BigTextStyle（headless 中繼專用機唯一會俾人睇到嘅嘢）
+        // ③ 8787 打印頁失敗時唔好自動閂（700ms 根本睇唔到寫乜）
+        versionCode = 8
+        versionName = "1.1.3"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }
