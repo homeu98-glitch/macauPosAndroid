@@ -235,13 +235,20 @@ class RelayService : Service() {
     }
 
     private fun updateNotification() {
-        val text = when (RelayState.phase) {
+        val base = when (RelayState.phase) {
             "pairing" -> "等待配對：請喺 web POS「設置 → 打印機」輸入店舗 ID 配對"
             "connecting" -> "連線中…"
             "online" -> "已連線 · 已印 ${RelayState.printedCount} 張" +
                 (if (RelayState.failedCount > 0) " · 失敗 ${RelayState.failedCount}" else "")
             "offline" -> "雲端斷線，用 30s 輪詢兜底 · 已印 ${RelayState.printedCount} 張"
             else -> "待機"
+        }
+        // 中繼專用機多數係 headless 行（鎖屏擺喺角落），通知係唯一會俾人睇到嘅嘢。
+        // 淨係寫「失敗 N 張」等於冇講 —— 一定要帶埋原因落去。
+        val text = if (RelayState.failedCount > 0 && RelayState.lastPrintError.isNotBlank()) {
+            "$base\n⚠ ${RelayState.lastPrintError}"
+        } else {
+            base
         }
         if (text == lastNotifText) return
         lastNotifText = text
@@ -279,6 +286,9 @@ class RelayService : Service() {
         return builder
             .setContentTitle(getString(R.string.relay_running))
             .setContentText(text)
+            // BigTextStyle：失敗原因可以好長（「兩種通道都失敗｜直連：…｜SDK：…」），
+            // 冇咗呢個，摺埋嘅通知會cut 到只剩頭幾個字，等於冇講。
+            .setStyle(Notification.BigTextStyle().bigText(text))
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentIntent(launch)
             .setOngoing(true)
