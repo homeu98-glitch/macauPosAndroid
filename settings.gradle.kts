@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "pos-printer-android"
+rootProject.name = "print-agent-android"
 include(":app")

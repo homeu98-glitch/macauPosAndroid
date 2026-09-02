@@ -1,8 +1,8 @@
-package com.posdemo.printer.data
+package com.macau.pos.printagent.data
 
 import android.content.Context
-import com.posdemo.printer.model.PrinterDevice
-import com.posdemo.printer.model.PrinterService
+import com.macau.pos.printagent.model.PrinterDevice
+import com.macau.pos.printagent.model.PrinterService
 import org.json.JSONArray
 import org.json.JSONObject
 

@@ -1,4 +1,4 @@
-package com.posdemo.printer.net
+package com.macau.pos.printagent.net
 
 import android.content.Context
 import android.net.ConnectivityManager

@@ -1,4 +1,4 @@
-package com.posdemo.printer.model
+package com.macau.pos.printagent.model
 
 enum class PrinterService(val id: String, val label: String) {
     FRONT("front", "前台"),

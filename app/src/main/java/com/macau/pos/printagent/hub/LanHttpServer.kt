@@ -1,8 +1,8 @@
-package com.posdemo.printer.hub
+package com.macau.pos.printagent.hub
 
 import android.content.Context
 import android.util.Log
-import com.posdemo.printer.model.PrinterService
+import com.macau.pos.printagent.model.PrinterService
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream

@@ -1,12 +1,12 @@
-package com.posdemo.printer.hub
+package com.macau.pos.printagent.hub
 
 import android.content.Context
-import com.posdemo.printer.data.DeviceStore
-import com.posdemo.printer.model.PrinterDevice
-import com.posdemo.printer.model.PrinterService
-import com.posdemo.printer.net.EscPosPrinter
-import com.posdemo.printer.net.LanScanner
-import com.posdemo.printer.net.ScanHit
+import com.macau.pos.printagent.data.DeviceStore
+import com.macau.pos.printagent.model.PrinterDevice
+import com.macau.pos.printagent.model.PrinterService
+import com.macau.pos.printagent.net.EscPosPrinter
+import com.macau.pos.printagent.net.LanScanner
+import com.macau.pos.printagent.net.ScanHit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

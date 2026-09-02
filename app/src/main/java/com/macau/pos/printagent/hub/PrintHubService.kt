@@ -1,4 +1,4 @@
-package com.posdemo.printer.hub
+package com.macau.pos.printagent.hub
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,9 +11,9 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import com.posdemo.printer.MainActivity
-import com.posdemo.printer.R
-import com.posdemo.printer.net.LanScanner
+import com.macau.pos.printagent.MainActivity
+import com.macau.pos.printagent.R
+import com.macau.pos.printagent.net.LanScanner
 
 class PrintHubService : Service() {
     private var server: LanHttpServer? = null
@@ -28,7 +28,15 @@ class PrintHubService : Service() {
         } else {
             "http://$ip:${PrinterHub.PORT}"
         }
-        startAsForeground(url)
+        // startForeground 一定要成功（Android 要求 service 起身幾秒內 call），
+        // 但萬一 foreground service type 喺某部機被系統 reject，吞底先唔好連累成個 app 彈出。
+        // ⚠️ 如果 startForeground 真係掟錯而冇入到 foreground 狀態，系統會喺幾秒內
+        // kill 成個 hosting process（"did not call Service.startForeground"）。
+        // 所以 onFailure 即時 stopSelf()，等系統唔使 kill 成個 app。
+        runCatching { startAsForeground(url) }.onFailure {
+            Log.e(TAG, "startForeground 失敗，停止 PrintHubService 避免被系統 kill 成個 app", it)
+            stopSelf()
+        }
         try {
             server = LanHttpServer(this).also { it.start() }
         } catch (e: Exception) {

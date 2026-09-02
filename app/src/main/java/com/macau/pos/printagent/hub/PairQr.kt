@@ -1,4 +1,4 @@
-package com.posdemo.printer.hub
+package com.macau.pos.printagent.hub
 
 import android.graphics.Bitmap
 import android.graphics.Color
