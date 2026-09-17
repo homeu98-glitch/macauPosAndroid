@@ -20,8 +20,14 @@ android {
         // v1.1.3：補「失敗原因要睇得到」——① 雲端中繼失敗寫低原因 + Activity 紅字顯示
         // ② 常駐通知帶埋原因 + BigTextStyle（headless 中繼專用機唯一會俾人睇到嘅嘢）
         // ③ 8787 打印頁失敗時唔好自動閂（700ms 根本睇唔到寫乜）
-        versionCode = 8
-        versionName = "1.1.3"
+        // v1.1.4（code 9）：修「分格線一條變兩條」+「菜品名字體拉長變形」（docs/114）——
+        // ① `GS !` 改用標準 nibble 語意（s=0x00 / m=0x01 / l=0x11），舊版誤用 ESC! 嘅 0x20/0x30
+        //    令 n=0x20 變成「2 闊 3 高」→ 字拉長；② `FS !` 修正為 bit 0x04 / 0x0C；
+        // ③ 每行開頭 `clearMagnify()`（GS! / ESC! / FS! 歸零），唔再靠「上一行」假設；
+        // ④ 模板 `cols` 由 POS `buildSnapshot()` 統一計算（58→32、80→48），終結各 repo 各自判斷。
+        // ⚠️ 版本號一定要擰：門店靠呢個分辨「到底裝咗邊個 build」（改咗唔重裝 = 行為零變化）。
+        versionCode = 9
+        versionName = "1.1.4"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }

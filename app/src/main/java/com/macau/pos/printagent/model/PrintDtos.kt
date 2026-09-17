@@ -86,6 +86,12 @@ data class PrintJobDto(
     data class TemplateDto(
         val kind: String,
         val blocks: List<Block>,
+        /**
+         * 每行字符數，由 POS `buildSnapshot()` 計好（58mm→32、80mm→48、標籤跟紙尺寸 preset）。
+         * 2026-09-10 前係由呢度按 `printer.paperSize` 自己判斷，搞到各 repo 唔一致；
+         * 而家統一讀呢個值，舊 job 冇就 fallback（見 `EscPosRenderer.renderTemplateTicket`）。
+         */
+        val cols: Int? = null,
     )
 
     companion object {
@@ -173,7 +179,9 @@ data class PrintJobDto(
                     )
                 }
             } ?: emptyList()
-            TemplateDto(kind = kind, blocks = blocks)
+            // optInt 取唔到會回 0 → 當冇（fallback 去 printer.paperSize 判斷）
+            val cols = t.optInt("cols", 0).takeIf { it > 0 }
+            TemplateDto(kind = kind, blocks = blocks, cols = cols)
         }
 
         /** 依次試幾個 key，第一個非空白就用（snake_case 優先，camelCase 兜底）。 */

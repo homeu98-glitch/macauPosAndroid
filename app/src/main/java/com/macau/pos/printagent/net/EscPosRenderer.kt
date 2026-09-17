@@ -26,10 +26,13 @@ object EscPosRenderer {
      *  同 desktop-companion/companion-server.mjs SIZE_BYTE 同源（見 docs/70）。 */
     private val SIZE_BYTE = mapOf("s" to 0x00, "m" to 0x20, "l" to 0x30)
 
-    /** 中文（Kanji）字型倍大：印機內建 Kanji 字庫唔受 ESC ! n 影響。商頌 POS-80 實機對照測試
-     *  （docs/71 §11）證實要 FS & 入 Kanji mode，再用 GS ! n（0x1D 0x21 n）倍大（FS ! n 係 no-op）。
-     *  GS ! n bit 位同 ESC ! n 一致：s=正常(0x00) / m=雙寬(0x20) / l=雙高雙寬(0x30)。 */
-    private val KANJI_SIZE_BYTE = mapOf("s" to 0x00, "m" to 0x20, "l" to 0x30)
+    /** GS ! n — 標準 Epson nibble 語意：n = ((h-1)<<4)|(w-1)；s=1×1、m=2闊1高、l=2×2。
+     *  ⚠️ 唔可以用 ESC ! 嘅 0x20 / 0x30：GS ! 係 nibble 語意，0x20 → (h=3,w=1) = 2 闊 3 高，
+     *  會令菜品名「拉長變形」（docs/99 §1、docs/114 §2.4）。呢個係「字體異常」嘅元兇之一。 */
+    private val GS_SIZE_BYTE = mapOf("s" to 0x00, "m" to 0x01, "l" to 0x11)
+
+    /** FS ! n — 標準 ESC/POS Kanji 放大：bit 0x04 = 雙闊、0x08 = 雙高、0x0C = 2×2。 */
+    private val FS_SIZE_BYTE = mapOf("s" to 0x00, "m" to 0x04, "l" to 0x0C)
 
     /** 判斷字串是否含中日韓字符（CJK Unified / 兼容 / 全角 / 全角標點）。 */
     private fun hasCJK(s: String): Boolean {
@@ -194,23 +197,65 @@ object EscPosRenderer {
 
     private class Buf(private val cs: Charset, kanjiEnlarge: String? = null) {
         private val out = java.io.ByteArrayOutputStream()
-        /** 中文（Kanji）倍大指令：商頌 POS-80 等機要 GS ! n（0x1D 0x21）；標準 ESC/POS 機用 FS ! n（0x1C 0x21）。
+        /** 中文（Kanji）倍大路線：商頌 POS-80 等機要 GS ! n（0x1D 0x21）；標準 ESC/POS 機用 FS ! n（0x1C 0x21）。
          *  缺省 GS ! n：接上就用嘅安全值，已於商頌 POS-80 實機對照測試證實（FS ! n 喺呢部機係 no-op）。 */
-        private val kanjiCmd: Int = if (kanjiEnlarge == "FS!") FS else GS
-        /** 當前 ESC ! n 字型檔（s/m/l），用嚟決定同線中文 Kanji 嘅倍大檔。 */
+        private val useGs = kanjiEnlarge != "FS!"
+        /** 當前字型檔（s/m/l）。真正 emit 留喺 `emitLine`（每行決定，避免 ESC! / GS! 相乘）。 */
         private var curSize: String = "s"
+        private var curBold: Boolean = false
         fun cmd(vararg b: Int) = apply { b.forEach { out.write(it) } }
-        fun str(s: String) = apply {
-            cmd(ESC, 0x33, if (curSize == "l") 60 else 30)
+
+        /**
+         * 每行 emit 一次字型指令（對齊 `ESC !` / `GS !` / `FS !` 嘅相乘地雷，docs/80 B2、docs/99 §1）：
+         * - GS! 路線 + CJK 行：`ESC !` 唔帶放大 bit（避免同 `GS !` 相乘 → 變形）
+         * - 其他情況：`ESC !` 帶 `SIZE_BYTE[size]` 放大（ASCII / 半形）
+         * - CJK 行：`FS &` 入 Kanji mode 後，按路線發 `GS !` / `FS !` 對應 size byte
+         * - 行距跟縱向倍數（l 雙高 → 行距 double，避免大字重疊變扁，docs/74 B3）
+         *
+         * ⚠️ 舊版係 `style()` 即刻發 `ESC !` + `KANJI_SIZE_BYTE` 用咗 `ESC !` 嘅位元值（0x20/0x30），
+         * 喺 GS! 路線下係 nibble 語意 → 變成 2 闊 3 高 / 3×3 = 「菜品名拉長變形」
+         * （docs/99 §2、docs/114 §2.4）。
+         *
+         * ⚠️⚠️ 2026-09-10（docs/114）：**每行開頭一定要先 `clearMagnify()`**。
+         * `GS !` / `FS !` 係打印機**常駐狀態**，`ESC !` 清唔走佢、兩者仲會相乘 →
+         * 上一行係放大嘅 CJK（例如菜品名 m/l）時，跟住嗰行純 ASCII（分格線 `----`）
+         * 會無聲無息變成雙闊 → 一行放唔落 → 打印機自動折行 → **一條線變兩條**。
+         */
+        private fun emitLine(s: String, withLf: Boolean, inverse: Boolean = false) {
             val cjk = hasCJK(s)
-            // 中文（Kanji）字庫唔受 ESC ! n 倍大影響；先 FS & 入 Kanji mode，再用 kanjiCmd ! n（FS ! n / GS ! n）倍大，
-            // 印完 FS . 出 Kanji mode（docs/71 §11：商頌 POS-80 實機對照測試 V5/V6 證實 GS ! n 先有效，
-            // FS ! n 係 no-op；KANJI_SIZE_BYTE bit：s=0x00 / m=0x20 / l=0x30）。
-            if (cjk) cmd(FS, 0x26)                                   // FS & 入 Kanji mode
-            if (cjk) cmd(kanjiCmd, 0x21, KANJI_SIZE_BYTE[curSize] ?: 0x00) // Kanji 倍大（FS ! n / GS ! n）
+            clearMagnify()
+            val escByte = if (useGs && cjk) 0x00 else (SIZE_BYTE[curSize] ?: 0x00)
+            cmd(ESC, 0x21, escByte)
+            cmd(ESC, 0x45, if (curBold) 1 else 0)
+            cmd(ESC, 0x33, if (curSize == "l") 60 else 30)
+            if (cjk) {
+                cmd(FS, 0x26) // FS & 入 Kanji mode
+                if (useGs) cmd(GS, 0x21, GS_SIZE_BYTE[curSize] ?: 0x00)
+                else cmd(FS, 0x21, FS_SIZE_BYTE[curSize] ?: 0x00)
+            }
+            if (inverse) cmd(ESC, 0x7B, 0x01) // ESC { 1 反白開
             out.write(encode(s, cs))
-            if (cjk) cmd(FS, 0x2E)                                   // FS . 出 Kanji mode
+            if (inverse) cmd(ESC, 0x7B, 0x00) // ESC { 0 反白閂（喺 LF 之前）
+            if (cjk) cmd(FS, 0x2E) // FS . 出 Kanji mode（先出 mode 再 LF，同 companion textLine）
+            if (withLf) out.write(LF)
         }
+
+        /**
+         * 清走三套放大指令嘅殘留狀態（唔改行距、唔改對齊）。
+         *
+         * 三個都要發：`GS !` 同 `FS !` 係**常駐**嘅，`ESC !` 清唔走佢哋；
+         * 而 `GS !` / `FS !` / `ESC !` 喺 Gprinter / 商頌系機器上係**相乘**語義（docs/80 B2）。
+         * 所以任何一行（特別係純 ASCII 嘅分格線）印之前都要 call 一次，
+         * 唔可以靠「上一行唔會放大」呢個假設（docs/114）。
+         */
+        fun clearMagnify() = apply {
+            cmd(GS, 0x21, 0x00)
+            cmd(ESC, 0x21, 0x00)
+            cmd(FS, 0x21, 0x00)
+        }
+
+        fun str(s: String) = apply { emitLine(s, false) }
+
         /**
          * @param inverse 反白（黑底白字）= 熱敏紙唯一表達得到嘅「底色 / 強調」（docs/95 §3）。
          *
@@ -220,54 +265,50 @@ object EscPosRenderer {
          * ⚠️ 一定係「文字前開、文字後閂」，**唔包 LF**：反白要先喺 encode() 之前開、
          * 喺 LF 之前閂，否則換行位會被反白成一條黑邊，或者反白狀態殘留去下一行。
          */
-        fun line(s: String = "", inverse: Boolean = false) = apply {
-            // 行距跟字型縱向倍數：l(2×高)→60/180"，s/m(1×高)→30/180"。
-            // 漏咗就係「大字體重疊」嘅根因（docs/74 §3），而家每行列印前都同步一次。
-            cmd(ESC, 0x33, if (curSize == "l") 60 else 30)
-            val cjk = hasCJK(s)
-            if (cjk) cmd(FS, 0x26)
-            if (cjk) cmd(kanjiCmd, 0x21, KANJI_SIZE_BYTE[curSize] ?: 0x00)
-            if (inverse) cmd(ESC, 0x7B, 0x01) // ESC { 1 反白開
-            out.write(encode(s, cs))
-            if (inverse) cmd(ESC, 0x7B, 0x00) // ESC { 0 反白閂（喺 LF 之前）
-            out.write(LF)
-            if (cjk) cmd(FS, 0x2E)
-        }
+        fun line(s: String = "", inverse: Boolean = false) = apply { emitLine(s, true, inverse) }
         fun bytes(ba: ByteArray) = apply { out.write(ba) }
         fun toBytes(): ByteArray = out.toByteArray()
 
-        /** ESC ! n 字型大小 + ESC E 粗體（對應 web 預覽 size/bold）。同時記低 curSize 畀中文 GS ! n 用。 */
-        fun style(size: String, bold: Boolean) = apply {
-            curSize = size
-            cmd(ESC, 0x21, SIZE_BYTE[size] ?: 0x00)
-            cmd(ESC, 0x45, if (bold) 1 else 0)
+        /** 目前 sticky 字型檔（s/m/l）；舊模板分格線「繼承上一行」時讀（docs/114 §3.3）。 */
+        fun currentSize(): String = curSize
+
+        /**
+         * 印一條分隔線（`width` = 1× 字型一行嘅格數）。
+         *
+         * 刻意唔經 `emitLine`（線唔應該帶 Kanji mode 指令），所以**冇自動 clearMagnify** →
+         * **一定要自己清**：呢行係純 ASCII，前面一行若係放大了嘅 CJK（菜品名 m/l → 發過
+         * `GS ! 0x01`），常駐放大狀態會令條線變雙闊 → 一行放唔落 → 自動折行 → 一條變兩條（docs/114）。
+         */
+        fun sep(width: Int) = apply {
+            clearMagnify()
+            out.write(encode("-".repeat(width) + "\n", cs))
         }
-        /** ESC a 對齊：center=1 / right=2 / 其他=0（left）。 */
+
+        /** `ESC ! n` 字型大小 + `ESC E` 粗體（對應 web 預覽 size/bold）。同時記低 curSize 畀中文 GS ! n 用。 */
+        fun style(size: String, bold: Boolean) = apply { curSize = size; curBold = bold }
+        /** `ESC a` 對齊：center=1 / right=2 / 其他=0（left）。 */
         fun align(a: String) = apply {
             val code = when (a) { "center" -> 1; "right" -> 2; else -> 0 }
             cmd(ESC, 0x61, code)
         }
         /** 重設粗體 + 對齊（避免殘留落去下一行）。 */
         fun reset() = apply {
-            curSize = "s"
+            curSize = "s"; curBold = false
             cmd(ESC, 0x45, 0x00)
             cmd(ESC, 0x61, 0x00)
         }
 
         /**
-         * 強制清除放大狀態（GS ! 0x00 + ESC ! 0x00 + ESC 3 30），防殘留落下一張單（docs/81 P1-B）。
-         * 印點陣圖（QR）前一定要 call：放大狀態會令 GS v 0 嘅闊度計錯 → 圖變形 / 甩出紙邊。
+         * 強制清除放大狀態（`GS ! 0x00` + `ESC ! 0x00` + `ESC 3 30`），防殘留落下一張單（docs/81 P1-B）。
+         * 印點陣圖（QR）前一定要 call：放大狀態會令 `GS v 0` 嘅闊度計錯 → 圖變形 / 甩出紙邊。
          */
         fun resetMagnify() = apply {
-            curSize = "s"
+            curSize = "s"; curBold = false
             cmd(GS, 0x21, 0x00)
             cmd(ESC, 0x21, 0x00)
             cmd(ESC, 0x33, 30)
         }
     }
-
-    private fun separator(width: Int, cs: Charset): ByteArray =
-        encode("-".repeat(width) + "\n", cs)
 
     private fun ticketTypeLabel(ticketType: String?): String = when (ticketType) {
         "addon" -> "【加單】"
@@ -285,12 +326,12 @@ object EscPosRenderer {
         buf.line(storeName ?: "Macau POS")
         buf.line(ticketTypeLabel(job.ticketType))
         buf.cmd(ESC, 0x61, 0x00)      // left
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
 
         job.orderNo?.takeIf { it.isNotBlank() }?.let { buf.line("單號: $it") }
         job.tableName?.takeIf { it.isNotBlank() }?.let { buf.line("桌台: $it") }
         job.printerName?.takeIf { it.isNotBlank() }?.let { buf.line("打印機: $it") }
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
 
         for (item in job.items.orEmpty()) {
             val qty = if (item.quantity <= 0) 1 else item.quantity
@@ -300,7 +341,7 @@ object EscPosRenderer {
             item.note?.takeIf { it.isNotBlank() }?.let { buf.line("  注：$it") }
         }
 
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
         val ts = runCatching {
             SimpleDateFormat("yyyy/M/d HH:mm:ss", Locale.getDefault())
                 .format(Date(job.createdAt ?: System.currentTimeMillis()))
@@ -320,7 +361,7 @@ object EscPosRenderer {
         buf.line(storeName ?: "Macau POS")
         buf.line("打印測試頁")
         buf.cmd(ESC, 0x61, 0x00)
-        buf.bytes(separator(32, cs))
+        buf.sep(32)
         buf.line("打印機: ${printer?.name ?: "-"}")
         val conn = printer?.connectionType ?: "-"
         buf.line("連接: $conn")
@@ -330,7 +371,7 @@ object EscPosRenderer {
             buf.line("USB: ${printer?.usbLabel ?: "-"}")
         }
         buf.line("Charset: ${cs.name()}")
-        buf.bytes(separator(32, cs))
+        buf.sep(32)
         buf.line("若看到此行，LAN/USB 橋接正常。")
         buf.cmd(LF, LF, LF)
         buf.cmd(GS, 0x56, 0x00)
@@ -353,14 +394,14 @@ object EscPosRenderer {
         buf.line(storeName ?: "Macau POS")
         buf.line("收據")
         buf.cmd(ESC, 0x61, 0x00)
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
         job.orderNo?.takeIf { it.isNotBlank() }?.let { buf.line("單號: $it") }
         job.tableName?.takeIf { it.isNotBlank() }?.let { buf.line("桌台: $it") }
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
         for (item in job.items.orEmpty()) {
             buf.line("${item.name} x${item.quantity}")
         }
-        buf.bytes(separator(width, cs))
+        buf.sep(width)
         total?.let { buf.line("總計: MOP ${"%.0f".format(it)}") }
         paymentMethod?.takeIf { it.isNotBlank() }?.let { buf.line("支付: $it") }
         val ts = SimpleDateFormat("yyyy/M/d HH:mm:ss", Locale.getDefault()).format(Date())
@@ -384,7 +425,9 @@ object EscPosRenderer {
         val cs = resolveCharset(printer?.charset)
         // docs/96 §9：紙寬跟機（58mm → 32 格，80mm → 48 格）。
         // Sunmi V2 內置打印機係 58mm —— 唔計嘅話兩欄全部超出紙寬、價錢甩行。
-        val cols = paperColumns(printer)
+        // 每行字符數：優先用 POS 計好寫入快照嘅值（`buildSnapshot` 按打印機紙闊 /
+        // 標籤紙尺寸 preset 計），各 repo 讀同一個數；舊 job 冇 → 用本地判斷做 fallback。
+        val cols = template.cols ?: paperColumns(printer)
         val buf = Buf(cs, printer?.kanjiEnlarge)
         buf.cmd(ESC, 0x40) // init
 
@@ -398,12 +441,33 @@ object EscPosRenderer {
             buf.reset()
         }
 
-        // 分隔線都要跟紙寬：58mm 印 48 格會 wrap 成兩行，白食一格紙又醜。
-        val divider = "-".repeat(cols)
+        val dashFull = "-".repeat(cols)
+        // ── 分格線（divider）區塊（2026-09-10，POS 端契約見 macauPosSystem docs/114）──
+        // 分格線係一行**純 ASCII**（`"-".repeat(n)`），實機有兩個坑：
+        //   ① 放大狀態係常駐、`ESC !` 清唔走 `GS !` → 交畀 `emitLine()` 開頭嘅 `clearMagnify()`；
+        //   ② 放大之後一行只裝得落 `cols / 2` 個 dash → dash 數量要跟 size 減半，
+        //      否則 48 個雙闊 dash 會**自動折行** → 一條線變兩條（實紙 bug，docs/114 §1）。
+        //
+        //   - 區塊存在 + visible=false → 全張單唔印分格線（dividerOff）
+        //   - 區塊存在 + visible=true  → 用區塊嘅 size（三邊一致，同 POS 預覽 / print hub）
+        //   - 區塊唔存在（舊模板）      → 沿用「繼承上一行」舊語義（仍然保證一行）
+        val dividerBlock = template.blocks.firstOrNull { it.id == "divider" }
+        val dividerOff = dividerBlock != null && !dividerBlock.visible
+        val fixedDividerSize = dividerBlock?.takeIf { it.visible }?.size
+        fun dashLine(size: String): String =
+            if (size == "s") dashFull else "-".repeat((cols + 1) / 2)
+        fun rule() {
+            if (dividerOff) return
+            val size = fixedDividerSize ?: buf.currentSize()
+            buf.style(size, false)
+            buf.line(dashLine(size))
+        }
         for (b in template.blocks) {
             if (!b.visible) continue
+            // 分格線係設定型區塊：淨提供 size / 開關，自己唔會 emit 行
+            if (b.id == "divider") continue
             if (b.id == "items") {
-                buf.line(divider)
+                rule()
                 val layout = b.layout
                 // 收據先印價錢 / 折扣（同 desktop-companion 同源）：廚房單同標籤單要同客人和廚房
                 // 溝通嘅係「乜嘢菜、幾多份」，價錢係收據先有嘅資訊 → 呢段淨對 receipt 生效，
@@ -428,7 +492,7 @@ object EscPosRenderer {
                             "${i + 1}. ${it.name}  $qtyText"
                         }
                         buf.align(b.align); buf.style(b.size, b.bold); buf.line(nameLine)
-                        buf.line(divider)
+                        rule()
                         for (s in it.specs.orEmpty()) {
                             // 規格行加購價錢靠右（docs/95 §用戶反饋 R1）：拆 (label, price) 後 twoColumn。
                             buf.align(b.align); buf.style(b.subSize, false)
@@ -474,7 +538,7 @@ object EscPosRenderer {
                         }
                     }
                 }
-                buf.line(divider)
+                rule()
             } else if (b.id == "qr_code") {
                 // 收據二維碼：POS 端已 encode 好點陣；空白 / 網址太長 → job.qr 係 null → 乜都唔印
                 job.qr?.let { qrRaster(buf, it, b.align.ifBlank { "center" }) }
