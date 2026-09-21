@@ -1,6 +1,6 @@
 # Desktop Companion 架構說明 + Android APK 移植方案
 
-> 2026-09-17 · print-agent-android
+> 2026-09-17 · macauPosAndroid
 > 目的：先講清 `C:\dev\desktop-companion` 現在**實際點運作**（尤其 setup 流程同介面來源），
 > 再據此規劃 Android APK 的移植方案。
 >
