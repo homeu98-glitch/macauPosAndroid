@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "print-agent-android"
+rootProject.name = "macauPosAndroid"
 include(":app")

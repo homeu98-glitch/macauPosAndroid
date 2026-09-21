@@ -1,4 +1,4 @@
-# print-agent-android
+# macauPosAndroid
 
 澳門 POS（`macauPosSystem`）的 **Android 打印代理**。包名 `com.macau.pos.printagent`。
 
