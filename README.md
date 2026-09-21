@@ -169,7 +169,8 @@ app/src/main/
 
 docs/
   desktop-parity-port-plan.md  🔴 desktop 架構說明 + 移植方案（含三種環境分流）
-  print.html / index.html / printer.html
+  device-verification-*.md     真機／emulator 驗證報告（`tools/verify-device.cjs` 產出）
+  device-print-capture-*.bin   驗證時收落嘅 ESC/POS 原始字節樣本
 apk-archive/                   歷史 APK（按日期命名，唔好喺根目錄放舊版）
 ```
 
