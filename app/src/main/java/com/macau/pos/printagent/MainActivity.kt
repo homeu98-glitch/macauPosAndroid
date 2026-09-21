@@ -16,13 +16,11 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.macau.pos.printagent.BuildConfig
-import com.macau.pos.printagent.hub.PairQr
-import com.macau.pos.printagent.hub.PrintHubService
-import com.macau.pos.printagent.hub.PrinterHub
 import com.macau.pos.printagent.model.PrintJobDto
 import com.macau.pos.printagent.model.PrinterCfgDto
-import com.macau.pos.printagent.net.SdkPrinter
+import com.macau.pos.printagent.companion.NativeCompanionServer
 import com.macau.pos.printagent.net.LanScanner
+import com.macau.pos.printagent.net.SdkPrinter
 import com.macau.pos.printagent.net.UsbKey
 import com.macau.pos.printagent.relay.RelayActivity
 import com.macau.pos.printagent.relay.RelayPrefs
@@ -40,13 +38,31 @@ import org.json.JSONObject
  * POS 外殼：WebView 載入 Vercel POS（BuildConfig.POS_URL），注入 PosNative
  * JS bridge 俾 POS 直接 LAN 打印（無 mixed content、無 Tunnel、斷網照印）。
  *
- * 保留 app 內「打印機設定」畫面（assets/index.html）—— openPrinterSettings() 切過去。
+ * ─────────────────────────────────────────────────────────────
+ * 三種環境分流的 Android 端（2026-09-18）
+ * ─────────────────────────────────────────────────────────────
+ * 本 APK = 用戶所講嘅「Android native app」環境。POS 網頁側會用
+ * `detectPrintEnvironment()` 判斷：
+ *
+ *   · 純 website      → 只有 Cloud Print Relay
+ *   · desktop companion → `http://127.0.0.1:9311`（Electron 殼開嘅 loopback agent）
+ *   · **Android native** → `window.PosNative.*` in-process bridge（就係本檔嘅 Bridge）
+ *                          ＋ `:9311` 由 [NativeCompanionServer] 提供嘅 3 個探測端點
+ *
+ * `NativeCompanionServer` 存在嘅唯一理由：POS 側嘅 printer wizard 會用
+ * `isCompanionAvailable(true)` / `probeCompanion()` / `probeLan()` 探
+ * `http://127.0.0.1:9311/api/health|config|probe-lan`。呢三個端點喺 desktop
+ * 由 Electron companion 提供，喺 Android 就要由本 APK 自己補上，否則 USB
+ * 掃描精靈會喺第一步就短路 return（見 docs/desktop-parity-port-plan.md §2.4②）。
+ *
+ * ⚠️ 佢**唔係**舊 printerhub（已刪）：無 HTML 介面、無掃描綁定、無打印旁路。
+ *    只回 3 個 JSON 端點，其餘一律 404。
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var scanner: LanScanner
-    private lateinit var hub: PrinterHub
+    private lateinit var companion: NativeCompanionServer
     private lateinit var usbController: UsbController
     private lateinit var btController: BtController
 
@@ -78,20 +94,23 @@ class MainActivity : ComponentActivity() {
         // runCatching：中繼服務起身失敗（例如非 Sunmi 機初始化擲錯）唔可以連累 MainActivity 彈出。
         if (relayPrefs.isPaired()) runCatching { RelayService.start(this) }
 
-        hub = PrinterHub.get(this)
         scanner = LanScanner(this)
         usbController = UsbController(this) { evalJs(it) }
         btController = BtController(this) { evalJs(it) }
         usbController.register()
-        // runCatching：LAN hub foreground service 起身失敗唔可以令 app 彈出。
-        runCatching { PrintHubService.start(this) }
+
+        // 與 desktop companion 同構嘅 loopback 探測端點（:9311）。
+        // 起唔到（port 被佔）唔可以連累 app —— POS 側會當「Companion 未啟動」優雅降級。
+        companion = NativeCompanionServer(this, scanner)
+        runCatching { companion.start() }
+            .onFailure { Log.w("PRINTAGENT", "NativeCompanionServer 起步失敗：${it.message}") }
 
         webView = WebView(this)
         setContentView(webView)
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.databaseEnabled = true
-        // POS 喺 HTTPS；native 允許佢打 LAN HTTP（如需 HTTP hub 做 fallback）。
+        // POS 喺 HTTPS；native 要允許佢打 loopback HTTP（:9311/api/health 探測）。
         webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = WebViewClient()
@@ -104,13 +123,6 @@ class MainActivity : ComponentActivity() {
         // （見 crash.txt 17:23:46）。擺喺後面個 JS callback 先收得到。
         maybeRequestNotifyPermission()
         maybeRequestBtPermissions()
-
-        hub.webCommandListener = PrinterHub.WebCommandListener { serviceId, label, message, printed ->
-            evalJs(
-                "onWebCommand(${JSONObject.quote(serviceId)}, ${JSONObject.quote(label)}, " +
-                    "${JSONObject.quote(message)}, $printed)"
-            )
-        }
     }
 
     /** launch 失敗嘅兜底 UI：顯示 exception 訊息 + stack，等用家睇得到、logcat 都執得到。 */
@@ -136,25 +148,17 @@ class MainActivity : ComponentActivity() {
         webView.loadUrl(url)
     }
 
-    /** 載 app 內打印機設定畫面（舊 index.html）。 */
-    private fun loadPrinterSettings() {
-        webView.loadUrl("file:///android_asset/index.html")
-    }
-
-    /** 返回 POS：等設定 UI 透過 PosNative.backToPos() 呼叫。 */
-    private fun backToPos() = loadPos()
-
     override fun onDestroy() {
         // setup() 有機會喺 lateinit 全部 assign 之前就掟嘢，呢度逐個 guard，
         // 唔可以 uninitialized access 再彈多次（掩蓋咗原本嘅 crash）。
-        if (::hub.isInitialized) hub.webCommandListener = null
+        if (::companion.isInitialized) runCatching { companion.stop() }
         if (::usbController.isInitialized) usbController.unregister()
         if (::btController.isInitialized) btController.unregister()
         super.onDestroy()
     }
 
     override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     private fun maybeRequestNotifyPermission() {
@@ -190,13 +194,16 @@ class MainActivity : ComponentActivity() {
     /**
      * PosNative bridge —— POS 透過 window.PosNative.* 呼叫。
      * 所有 @JavascriptInterface method 必須喺主綫程註冊嘅 class 入面。
+     *
+     * 呢個 bridge **就係** Android native 環境嘅「Companion 代理」本體：
+     * desktop 靠 `:9311` HTTP 提供嘅查詢能力，Android 大部分直接喺呢度回。
      */
     private inner class Bridge {
 
         /** POS 落單後直接印。payload = { job, printer?, meta?, kind? }
          *  kind: "kitchen"（預設）/ "receipt" / "test"
          *  printer: DevicePrinterConfig 子集（id/name/connectionType/ipAddress/lanPort/paperSize/charset）
-         *  呢個係主路：POS 帶齊 printer 資料，native 唔使靠 PrinterHub binding。 */
+         *  呢個係主路：POS 帶齊 printer 資料。 */
         @JavascriptInterface
         fun printJob(payloadJson: String): String {
             return try {
@@ -210,8 +217,8 @@ class MainActivity : ComponentActivity() {
                 val total = root.opt("total") as? Double
                     ?: root.optString("total").toDoubleOrNull()
 
-                val target = printer ?: resolvePrinterFromHub(job)
-                val t = target ?: return err("找不到打印機設定（payload 冇 printer，PrinterHub 又冇匹配 ${job.printerName ?: job.printerId ?: ""}）")
+                val t = printer
+                    ?: return err("payload 冇 printer（請喺 POS 打印機設定揀好機再打）")
 
                 // 預檢：畀清晰錯誤，唔使等 SDK 連線 timeout（SdkPrinter 內部會再做一次）
                 when (t.connectionType) {
@@ -221,8 +228,9 @@ class MainActivity : ComponentActivity() {
                     "bluetooth" -> if (t.bluetoothAddress.isNullOrBlank()) {
                         return err("藍牙打印機缺少 address（請先用 listBtPrinters / scanBtPrinters 揀機並儲存）")
                     }
+                    "sunmi" -> Unit
                     else -> if (t.ipAddress.isNullOrBlank() || t.lanPort <= 0) {
-                        return err("找不到打印機 IP（payload 冇 printer，PrinterHub 又冇匹配 ${job.printerName ?: job.printerId ?: ""}）")
+                        return err("LAN 打印機缺少 IP／port（請確認 POS 打印機設定）")
                     }
                 }
 
@@ -252,6 +260,7 @@ class MainActivity : ComponentActivity() {
                 when (printer.connectionType) {
                     "usb" -> if (printer.usbVendorId == 0 || printer.usbProductId == 0) return err("USB 打印機缺少 VID/PID")
                     "bluetooth" -> if (printer.bluetoothAddress.isNullOrBlank()) return err("藍牙打印機缺少 address")
+                    "sunmi" -> Unit
                     else -> if (printer.ipAddress.isNullOrBlank()) return err("缺 ipAddress")
                 }
 
@@ -273,7 +282,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        /** POS 健康檢查：{ available: true, localIp, devices } */
+        /** POS 健康檢查：{ ok, available, service, localIp, companionPort } */
         @JavascriptInterface
         fun getStatus(): String {
             val localIp = scanner.detectLocalIpv4().orEmpty()
@@ -281,9 +290,11 @@ class MainActivity : ComponentActivity() {
                 .put("ok", true)
                 .put("available", true)
                 .put("service", "macau-pos-print-agent")
+                .put("env", "android")
+                .put("version", BuildConfig.VERSION_NAME)
                 .put("localIp", localIp)
-                .put("hasConfig", hub.snapshot().isNotEmpty())
-                .put("printerCount", hub.snapshot().size)
+                .put("companionPort", NativeCompanionServer.PORT)
+                .put("companionListening", companion.isListening())
                 .toString()
         }
 
@@ -316,14 +327,7 @@ class MainActivity : ComponentActivity() {
                 .toString()
         }
 
-        /** POS 列出已綁定打印機（PrinterHub 嗰套，可選用）。 */
-        @JavascriptInterface
-        fun listDevices(): String = JSONObject()
-            .put("ok", true)
-            .put("devices", hub.devicesJson())
-            .toString()
-
-        /** USB：列出目前插著嘅 USB 打印機（VID/PID/label/權限）。 */
+        /** USB：列出目前插著嘅 USB 打印機（VID/PID/label/權限 + 型號表解析結果）。 */
         @JavascriptInterface
         fun listUsbPrinters(): String = try {
             JSONObject().put("ok", true).put("printers", JSONArray(usbController.candidatesJson())).toString()
@@ -368,114 +372,26 @@ class MainActivity : ComponentActivity() {
             return JSONObject().put("ok", true).put("requested", true).toString()
         }
 
-        /** POS 設定頁「開啟打印機設定」按鈕 → 跳 app 內掃描/綁定 UI。 */
+        /**
+         * LAN：探測某個 ip:port 有冇 listening。
+         *
+         * 對應 desktop `POST /api/probe-lan`（POS wizard「測試連接」掣）。
+         * 亦經 [NativeCompanionServer] 嘅 `/api/probe-lan` 對外，兩條路共用同一實現。
+         *
+         * 同步回（`@JavascriptInterface` 唔可以 suspend）：用阻塞式 Socket，
+         * timeout 由 [EscPosPrinter.probe] 內部控住（1.2s），唔會卡死 UI 執行緒。
+         */
         @JavascriptInterface
-        fun openPrinterSettings() {
-            webView.post { loadPrinterSettings() }
-        }
-
-        /** 設定 UI「返回 POS」按鈕。 */
-        @JavascriptInterface
-        fun backToPos() {
-            webView.post { backToPos() }
-        }
-
-        // ---- 以下保留畀 app 內設定 UI（index.html）用，沿用 demo 原有合約 ----
-        @JavascriptInterface
-        fun getBootstrapJson(): String {
-            val localIp = scanner.detectLocalIpv4().orEmpty()
-            val prefix = scanner.detectSubnetPrefix().orEmpty()
-            val hubUrl = if (localIp.isBlank()) "" else "http://$localIp:${PrinterHub.PORT}"
-            return JSONObject()
-                .put("localIp", localIp)
-                .put("subnetPrefix", prefix.ifEmpty { "192.168.1" })
-                .put("hubPort", PrinterHub.PORT)
-                .put("hubUrl", hubUrl)
-                .put("hubListening", hub.listening)
-                .put("posUrl", BuildConfig.POS_URL)
-                .put("devices", hub.devicesJson())
-                .toString()
-        }
-
-        @JavascriptInterface
-        fun getPairQrDataUrl(): String {
-            val ip = scanner.detectLocalIpv4().orEmpty()
-            if (ip.isBlank()) return ""
-            return PairQr.dataUrl("http://$ip:${PrinterHub.PORT}")
-        }
-
-        @JavascriptInterface
-        fun detectSubnet(): String = scanner.detectSubnetPrefix().orEmpty()
-
-        @JavascriptInterface
-        fun detectLocalIp(): String = scanner.detectLocalIpv4().orEmpty()
-
-        @JavascriptInterface
-        fun startScan(prefix: String, identify: Boolean) {
-            hub.requestScan(prefix, identify)
-        }
-
-        @JavascriptInterface
-        fun addManual(ip: String, name: String, serviceId: String) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                hub.addManualBlocking(ip, name, serviceId)
-                withContext(Dispatchers.Main) {
-                    evalJs("onDevicesUpdated(${hub.devicesJson()}, '已保存')")
-                }
+        fun probeLan(ip: String, port: Int): String {
+            val target = ip.trim()
+            if (!target.matches(Regex("""\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"""))) {
+                return JSONObject().put("ok", false).put("error", "IP 格式不正確：$ip").toString()
             }
+            val p = if (port > 0 && port <= 65535) port else 9100
+            val reachable = companion.probeLanBlocking(target, p)
+            return JSONObject().put("ok", true).put("ip", target).put("port", p)
+                .put("reachable", reachable).toString()
         }
-
-        @JavascriptInterface
-        fun assignService(key: String, serviceId: String) {
-            hub.assignService(key, serviceId)
-            lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已綁定服務')")
-            }
-        }
-
-        @JavascriptInterface
-        fun removeDevice(key: String) {
-            hub.removeDevice(key)
-            lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已移除')")
-            }
-        }
-
-        @JavascriptInterface
-        fun clearAll() {
-            hub.clearAll()
-            lifecycleScope.launch {
-                evalJs("onDevicesUpdated(${hub.devicesJson()}, '已清除全部')")
-            }
-        }
-
-        @JavascriptInterface
-        fun printService(serviceId: String, message: String) {
-            lifecycleScope.launch {
-                val result = hub.printService(serviceId, message)
-                result.logs.forEach { log ->
-                    evalJs("onPrintLog('${escapeJs(log.text)}', ${log.warn})")
-                }
-            }
-        }
-    }
-
-    /** 由 PrinterHub 已綁定設備搵匹配（fallback，當 POS 冇帶 printer 時）。 */
-    private fun resolvePrinterFromHub(job: PrintJobDto): PrinterCfgDto? {
-        val snap = hub.snapshot()
-        val match = snap.firstOrNull { it.name == job.printerName }
-            ?: snap.firstOrNull { it.key == job.printerId }
-            ?: return null
-        return PrinterCfgDto(
-            id = match.key,
-            name = match.name,
-            connectionType = if (match.canRawPrint) "lan" else "unknown",
-            ipAddress = match.ip,
-            lanPort = 9100,
-            paperSize = null,
-            usbLabel = null,
-            charset = null,
-        )
     }
 
     private fun ok(jobId: String) = JSONObject().put("ok", true).put("jobId", jobId).toString()
@@ -483,9 +399,6 @@ class MainActivity : ComponentActivity() {
         JSONObject().put("ok", true).put("queued", true).put("jobId", jobId)
             .put("ip", ip).put("port", port).toString()
     private fun err(msg: String) = JSONObject().put("ok", false).put("error", msg).toString()
-
-    private fun escapeJs(s: String): String =
-        s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
 
     private fun evalJs(script: String) {
         // webView 係 lateinit：任何時機（例如權限結果喺 WebView 建好前同步回呼、

@@ -26,8 +26,19 @@ android {
         // ③ 每行開頭 `clearMagnify()`（GS! / ESC! / FS! 歸零），唔再靠「上一行」假設；
         // ④ 模板 `cols` 由 POS `buildSnapshot()` 統一計算（58→32、80→48），終結各 repo 各自判斷。
         // ⚠️ 版本號一定要擰：門店靠呢個分辨「到底裝咗邊個 build」（改咗唔重裝 = 行為零變化）。
-        versionCode = 9
-        versionName = "1.1.4"
+        // v1.1.5（code 10）：移植 desktop Companion 能力 + 刪除 printerhub（docs/desktop-parity-port-plan.md）——
+        // ① 刪 `hub/` 全套（PrinterHub / LanHttpServer / PrintHubService / PairQr）+
+        //    `assets/{setup,index,remote}.html` + `EscPosPrinter.printTextTicket/buildTicket` 旁路；
+        // ② 新增 `net/UsbPrinterDb.kt`（20 VID 型號表，對齊 desktop `USB_PRINTER_DB`）
+        //    → `UsbPrinterCandidate` 補 charset/paperSize/kanjiEnlarge/family/max|minLabelWidthMm；
+        // ③ 新增 `companion/NativeCompanionServer.kt`（loopback :9311，只 3 端點：
+        //    /api/health、/api/config、/api/probe-lan）—— 補上 POS wizard 嘅
+        //    `isCompanionAvailable(true)` 閘，否則 USB 掃描精靈喺 Android 上短路；
+        // ④ `PrinterCfgDto` 補 family/max|minLabelWidthMm；
+        // ⑤ `EscPosPrinter.printRaw` 寫完等 300ms 才收 socket（對齊 desktop printLan，修大單截斷）。
+        // ⚠️ 版本號一定要擰：門店靠呢個分辨「到底裝咗邊個 build」（改咗唔重裝 = 行為零變化）。
+        versionCode = 10
+        versionName = "1.1.5"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }

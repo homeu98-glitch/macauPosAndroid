@@ -2,7 +2,6 @@ package com.macau.pos.printagent.relay
 
 import android.content.Context
 import android.util.Log
-import com.macau.pos.printagent.hub.PrinterHub
 import com.macau.pos.printagent.model.PrintJobDto
 import com.macau.pos.printagent.model.PrinterCfgDto
 import com.macau.pos.printagent.net.EscPosRenderer
@@ -156,8 +155,12 @@ object JobRunner {
      * 目標打印機解析順序：
      *  1. `row.printer` —— server 端解析好嘅打印機快照（jsonb，最權威）
      *  2. claim 回傳嘅 `printers` 陣列（按 printer_id → printer_name 配對）
-     *  3. 本機 LAN hub 已綁定設備（按 name → key 配對）
-     *  4. Sunmi 內置打印機（單 Sunmi 舖嘅預設）
+     *  3. Sunmi 內置打印機（單 Sunmi 舖嘅預設）
+     *
+     * ⚠️ 2026-09-18：原本仲有一層「本機 LAN hub 已綁定設備」fallback，隨
+     * printerhub 一併刪除（見 docs/desktop-parity-port-plan.md）。
+     * 理由：server 端 `row.printer` 而家一定會帶（POS 打印機設定統一落 DB），
+     * 舊 hub 綁定清單本身亦從未被網站接通（「全 repo 零呼叫端」）。
      */
     private fun resolvePrinter(
         context: Context,
@@ -175,22 +178,6 @@ object JobRunner {
             val list = printers.map { PrinterCfgDto.fromJson(it) }
             list.firstOrNull { pid != null && it.id == pid }?.let { return it }
             list.firstOrNull { pname != null && it.name == pname }?.let { return it }
-        }
-
-        runCatching {
-            val snap = PrinterHub.get(context).snapshot()
-            snap.firstOrNull { pname != null && it.name == pname }?.let {
-                return PrinterCfgDto(
-                    id = it.key,
-                    name = it.name,
-                    connectionType = "lan",
-                    ipAddress = it.ip,
-                    lanPort = 9100,
-                    paperSize = prefs.defaultPaperSize,
-                    usbLabel = null,
-                    charset = null,
-                )
-            }
         }
 
         // 兜底：Sunmi 內置（單 Sunmi 舖嘅正常路徑）

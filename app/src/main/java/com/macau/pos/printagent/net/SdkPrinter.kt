@@ -60,7 +60,7 @@ object SdkPrinter {
     var lastRawError: String? = null
         private set
 
-    /** LAN raw 直出用。EscPosPrinter 同時俾 PrinterHub 用，所以唔改做 object。 */
+    /** LAN raw 直出用。 */
     private val rawPrinter = EscPosPrinter()
 
     /** POSConnect.init 只需叫一次。建議搬去 Application.onCreate（見 docs/75）。 */

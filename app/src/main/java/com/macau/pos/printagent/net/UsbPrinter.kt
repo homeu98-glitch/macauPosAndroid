@@ -36,12 +36,21 @@ class UsbPrinter(private val context: Context) {
         runCatching { context.packageManager.hasSystemFeature(PackageManager.FEATURE_USB_HOST) }
             .getOrDefault(false)
 
-    /** 列舉目前插著嘅 USB 打印機（class 7），附權限狀態。 */
+    /**
+     * 列舉目前插著嘅 USB 打印機，附權限狀態 + 型號表解析結果。
+     *
+     * 過濾條件與 desktop `enumerateUsbPrinters()` 對齊：
+     * **`UsbPrinterDb.resolve(...) != null` 就認** —— 即係
+     * ① 命中型號表 VID，或 ② `deviceClass == 7`（USB Printer Class，driverless）。
+     *
+     * ⚠️ 2026-09-18 修：舊版只認 `deviceClass == 7` 或 interface class == 7。
+     * 有廠商把 deviceClass 報成 0（只喺 interface 報 class，或者乜都唔報），
+     * 但 VID/PID 喺型號表入面 —— desktop 認得到，Android 認唔到，行為唔一致。
+     */
     fun enumerate(): List<UsbPrinterCandidate> {
         if (!hasUsbHostFeature()) return emptyList()
         val list = usbManager.deviceList ?: return emptyList()
         return list.values
-            .filter { isPrinterDevice(it) }
             .map { dev ->
                 UsbPrinterCandidate.fromDevice(
                     vendorId = dev.vendorId,
@@ -50,9 +59,18 @@ class UsbPrinter(private val context: Context) {
                     productName = dev.productName,
                     serialNumber = safeSerial(dev),
                     hasPermission = usbManager.hasPermission(dev),
+                    deviceClass = dev.deviceClass,
                 )
             }
+            .filter { it.meta != null || isPrinterClassDevice(it) }
             .sortedBy { it.brandLabel }
+    }
+
+    /** 以 VID/PID 反查該設備（用於過濾階段仍要讀 dev 物件嘅場合）。 */
+    private fun isPrinterClassDevice(candidate: UsbPrinterCandidate): Boolean {
+        val dev = findDevice(UsbKey(candidate.vendorId, candidate.productId, candidate.serialNumber))
+            ?: return false
+        return isPrinterDevice(dev)
     }
 
     /** 用家未授權就返 false 並彈系統授權對話框；已授權返 true。 */

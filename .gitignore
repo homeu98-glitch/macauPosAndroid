@@ -10,7 +10,11 @@
 *.apk
 *.ap_
 *.aab
+# 例外：歷史 APK 存檔要入版控（店員要翻查「門店裝嘅係邊個 build」）。
+# 根目錄唔應該再放 *.apk —— 新 build 出喺 app/build/outputs/ 就夠。
+!/apk-archive/*.apk
 # WorkBuddy 專案資料（memory 等）—— 係本機工作數據，唔入版控
 /.workbuddy-ai/
+/.workbuddy/
 # 人手跑 build 時 dump 落嚟嘅 log
 build-log*.txt

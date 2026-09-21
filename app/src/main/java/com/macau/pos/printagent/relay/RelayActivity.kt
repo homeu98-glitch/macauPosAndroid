@@ -22,7 +22,6 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.macau.pos.printagent.BuildConfig
 import com.macau.pos.printagent.R
-import com.macau.pos.printagent.hub.PrinterHub
 import com.macau.pos.printagent.model.PrintJobDto
 import com.macau.pos.printagent.model.PrinterCfgDto
 import com.macau.pos.printagent.net.LanScanner
@@ -354,33 +353,15 @@ class RelayActivity : ComponentActivity() {
         return SunmiPrinter.sendRaw(EscPosRenderer.renderKitchenTicket(job, cfg, store))
     }
 
-    /** 打印去 LAN 第一台已綁定設備（用 SdkPrinter 既有連線路）。 */
-    private fun testLan() {
-        lifecycleScope.launch {
-            val r = withContext(Dispatchers.IO) {
-                val first = runCatching { PrinterHub.get(this@RelayActivity).snapshot() }
-                    .getOrNull()?.firstOrNull()
-                    ?: return@withContext Result.failure<Unit>(IllegalStateException("未有已綁定嘅 LAN 打印機"))
-                val cfg = PrinterCfgDto(
-                    id = first.key,
-                    name = first.name,
-                    connectionType = "lan",
-                    ipAddress = first.ip,
-                    lanPort = 9100,
-                    paperSize = prefs.defaultPaperSize,
-                    usbLabel = null,
-                    charset = null,
-                )
-                val bytes = EscPosRenderer.renderTestPage(cfg, prefs.storeName ?: "Macau POS")
-                SdkPrinter.printBytes(this@RelayActivity, cfg, bytes)
-            }
-            Toast.makeText(
-                this@RelayActivity,
-                if (r.isSuccess) "已送出測試頁" else "測試失敗：${r.exceptionOrNull()?.message}",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
+    /**
+     * 打印測試頁去 LAN 打印機（用 SdkPrinter 既有連線路）。
+     *
+     * ⚠️ 2026-09-18：原本會讀 printerhub 已綁定清單攞第一台 IP。printerhub 已刪
+     * （見 docs/desktop-parity-port-plan.md），而中繼機本身嘅出紙能力只有
+     * 「Sunmi 內置」同「row.printer 帶落嚟嘅設定」——中繼機唔應該自己揀機。
+     * 所以本掣改為測 Sunmi 內置；LAN 打印要靠正式排隊嘅 job（會帶 row.printer）。
+     */
+    private fun testLan() = printSunmiTest()
 
     private fun maybeRequestNotifyPermission() {
         // 用 Context#checkSelfPermission（API 23+）而唔係 ContextCompat：

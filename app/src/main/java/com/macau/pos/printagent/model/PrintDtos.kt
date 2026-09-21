@@ -236,6 +236,19 @@ data class PrinterCfgDto(
     val usbVendorId: Int = 0,
     val usbProductId: Int = 0,
     val bluetoothAddress: String? = null,
+    /**
+     * 硬件族：`"receipt"` / `"label"` / `"portable"`。
+     *
+     * 2026-09-18 補上（對齊 web `DevicePrinterConfig.family`）。
+     * 標籤機（`label`）用 TSPL 指令集，唔行 ESC/POS 排版 —— 混錯會出紙亂版。
+     * 目前 ESC/POS 渲染器未消費呢個欄位（TSPL 渲染器屬 Phase 2），
+     * 但一定要帶住，否則中繼／診斷睇唔出部機係咩族。
+     */
+    val family: String? = null,
+    /** 標籤機介質幅寬上限（mm）。POS 用嚟攔「放唔落嘅標籤紙」。 */
+    val maxLabelWidthMm: Int? = null,
+    /** 標籤機介質幅寬下限（mm）。 */
+    val minLabelWidthMm: Int? = null,
 ) {
     companion object {
         /**
@@ -270,6 +283,10 @@ data class PrinterCfgDto(
             usbProductId = parseId(o.opt("usbProductId")),
             bluetoothAddress = o.optString("bluetoothAddress").takeIf { it.isNotBlank() }
                 ?: o.optString("bluetoothName").takeIf { it.isNotBlank() },
+            family = o.optString("family").takeIf { it.isNotBlank() },
+            // 0 視為「未填」（mm 寬度唔可能係 0），與 web 側 null 語意一致。
+            maxLabelWidthMm = o.optInt("maxLabelWidthMm", 0).takeIf { it > 0 },
+            minLabelWidthMm = o.optInt("minLabelWidthMm", 0).takeIf { it > 0 },
         )
 
         /** 從 deviceConfig.printers JSON 陣列搵匹配 printer（先 id 後 name）。 */

@@ -5,8 +5,17 @@ import kotlinx.coroutines.withContext
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.charset.Charset
 
+/**
+ * LAN 打印機嘅**傳輸層**（raw TCP 9100）。
+ *
+ * ⚠️ 呢個 class **只負責送 bytes，唔負責排版**。
+ *
+ * 2026-09-18：舊嘅 `printTextTicket()` / `buildTicket()` 已隨 printerhub 一併刪除。
+ * 佢哋係一條旁路：固定 32 個 `-`、硬編 UTF-8、無兩欄／無折扣／無 QR／
+ * 而且放大語意用錯（`GS ! 0x11` 誤當 `ESC !` 嘅位元值，且完全冇 clearMagnify）
+ * —— 與三方同源嘅 [EscPosRenderer] 唔一致。所有出紙一律經 [SdkPrinter] → [EscPosRenderer]。
+ */
 class EscPosPrinter {
 
     suspend fun printRaw(
@@ -26,14 +35,16 @@ class EscPosPrinter {
                 val out: OutputStream = socket.getOutputStream()
                 out.write(payload)
                 out.flush()
+                // ⚠️ 寫完唔即刻收 socket：desktop companion-server.mjs 嘅 printLan 喺
+                // write 之後等 300ms 至 sock.end()，註釋明言「大單會 missing print」。
+                // 呢度留喺 socket 未 close 之前等，語意同 desktop 對齊。
+                try {
+                    Thread.sleep(WRITE_DRAIN_MS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
             }
-            // 寫完稍等一陣，畀對端有機會 RST（寫完即刻 close 有機會吞咗錯誤）
-            // 注意：唔好用 runCatching，佢做咗 lambda 最後一個 expression 會令返回型變 Result<Result<Unit>>
-            try {
-                Thread.sleep(150)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
+            Unit
         }
     }
 
@@ -41,52 +52,24 @@ class EscPosPrinter {
     suspend fun probe(
         ip: String,
         port: Int = 9100,
-        timeoutMs: Int = 1200,
+        timeoutMs: Int = PROBE_TIMEOUT_MS,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress(ip, port), timeoutMs)
             }
+            Unit
         }
     }
 
     companion object {
         const val RAW_TIMEOUT_MS = 5000
-    }
+        const val PROBE_TIMEOUT_MS = 1200
 
-    suspend fun printTextTicket(
-        ip: String,
-        title: String,
-        body: String,
-        footer: String = "POS Printer Demo",
-    ): Result<Unit> {
-        val bytes = buildTicket(title, body, footer)
-        return printRaw(ip, 9100, bytes)
-    }
-
-    fun buildTicket(title: String, body: String, footer: String): ByteArray {
-        val out = ArrayList<Byte>()
-        fun add(vararg b: Int) = b.forEach { out.add(it.toByte()) }
-        fun addStr(s: String) {
-            // 多數收據機預設碼頁對中文支援不一；同時送 UTF-8 與可讀 ASCII
-            out.addAll(s.toByteArray(Charset.forName("UTF-8")).toList())
-        }
-
-        add(0x1B, 0x40) // init
-        add(0x1B, 0x61, 0x01) // center
-        add(0x1D, 0x21, 0x11) // double size
-        addStr(title)
-        add(0x0A)
-        add(0x1D, 0x21, 0x00)
-        add(0x1B, 0x61, 0x00) // left
-        addStr("--------------------------------\n")
-        addStr(body)
-        if (!body.endsWith("\n")) add(0x0A)
-        addStr("--------------------------------\n")
-        add(0x1B, 0x61, 0x01)
-        addStr(footer)
-        add(0x0A, 0x0A, 0x0A)
-        add(0x1D, 0x56, 0x00) // partial cut
-        return out.toByteArray()
+        /**
+         * 寫完之後、close 之前嘅等待。對齊 desktop `printLan` 嘅 300ms。
+         * 短過 150ms 大單（幾 KB 以上嘅模板 + QR 點陣）會被對端 buffer 截斷。
+         */
+        const val WRITE_DRAIN_MS = 300L
     }
 }
