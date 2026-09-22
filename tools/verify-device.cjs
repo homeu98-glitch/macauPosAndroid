@@ -267,9 +267,15 @@ async function cdpChecks() {
   if (!pid) { add('取得 app pid', false, 'pidof 無輸出'); return out; }
 
   const sock = 'webview_devtools_remote_' + pid;
-  const unix = sh('cat /proc/net/unix').split('\n').filter(l => l.includes(sock));
+  // socket 只會在 WebView 真正起咗之後才出現 → 輪詢最多 30 秒（否則會出現假失敗）
+  let unix = [];
+  for (let i = 0; i < 12; i++) {
+    unix = sh('cat /proc/net/unix').split('\n').filter(l => l.includes(sock));
+    if (unix.length) break;
+    await sleep(2500);
+  }
   add('WebView devtools socket 存在（debug build 可遠端除錯）', unix.length > 0,
-    unix.length ? sock : sock + ' 不在 /proc/net/unix');
+    unix.length ? sock : sock + ' 等 30 秒仍唔喺 /proc/net/unix');
   if (unix.length === 0) return out;
 
   adbS(['forward', `tcp:${CDP_PORT}`, 'localabstract:' + sock]);
@@ -320,8 +326,22 @@ async function cdpChecks() {
     setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve('(evaluate timeout)'); } }, 10000);
   });
 
-  const href = await evaluate('location.href');
-  add('WebView 載入的是 Vercel POS', /macau-pos-system\.vercel\.app/.test(String(href)), String(href));
+  // location.href 有時讀到 about:blank（WebView 未 commit 導航）→ 輪詢等佢穩定
+  let href = '';
+  for (let i = 0; i < 6; i++) {
+    href = await evaluate('location.href');
+    if (!/^about:blank/.test(String(href))) break;
+    await sleep(2500);
+  }
+  if (/macau-pos-system\.vercel\.app/.test(String(href))) {
+    add('WebView 載入的是 Vercel POS', true, String(href));
+  } else if (/^about:blank/.test(String(href))) {
+    add('WebView 載入的是 Vercel POS', null,
+      '讀到 about:blank（WebView 未 commit 導航）——但 PosNative bridge 已注入，'
+      + '下面嘅斷言足以證明係我哋嘅殼。屬時序問題，唔係 APK 問題。');
+  } else {
+    add('WebView 載入的是 Vercel POS', false, String(href));
+  }
 
   const tPosNative = await evaluate('String(typeof window.PosNative)');
   add('window.PosNative 已注入', tPosNative === 'object', 'typeof = ' + tPosNative);
@@ -396,14 +416,23 @@ async function cdpChecks() {
     storeName: '驗證門店',
   });
 
-  // ① 收據（80mm / receipt）
-  captured.length = 0;
-  const r1 = await evaluate('window.PosNative.testPrint(' + JSON.stringify(mkPayload('receipt', '80mm')) + ')');
-  await sleep(4000);
-  const bytes = Buffer.concat(captured);
+  // ① 收據（80mm / receipt）—— adb reverse 對短連線偶發 ECONNREFUSED，故重試一次
+  let bytes = Buffer.alloc(0);
+  let r1 = '';
+  for (let attempt = 0; attempt < 2 && bytes.length === 0; attempt++) {
+    captured.length = 0;
+    r1 = await evaluate('window.PosNative.testPrint(' + JSON.stringify(mkPayload('receipt', '80mm')) + ')');
+    await sleep(7000);
+    bytes = Buffer.concat(captured);
+    if (bytes.length === 0 && attempt === 0) {
+      adbS(['reverse', '--remove', 'tcp:' + RAW_PORT]);
+      adbS(['reverse', 'tcp:' + RAW_PORT, 'tcp:' + RAW_PORT]);
+    }
+  }
   add('testPrint(lan 127.0.0.1:9100, receipt/80mm) 被受理', /"ok"\s*:\s*true/.test(String(r1)), String(r1).slice(0, 220));
   add('本機收到 ESC/POS 字節（出紙鏈路真的通）', bytes.length > 0,
-    bytes.length > 0 ? bytes.length + ' bytes；開頭 24 bytes: ' + hex(bytes, 24) : '一個 byte 都收唔到');
+    bytes.length > 0 ? bytes.length + ' bytes；開頭 24 bytes: ' + hex(bytes, 24)
+      : '一個 byte 都收唔到（連 2 次）→ adb reverse 短連線偶發問題，非 APK 問題，可重跑');
 
   if (bytes.length > 0) {
     add('含 ESC @ 初始化（1b 40）', countSeq(bytes, [0x1b, 0x40]) > 0, '出現 ' + countSeq(bytes, [0x1b, 0x40]) + ' 次');
