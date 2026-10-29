@@ -22,7 +22,14 @@ const fs = require("fs");
 const path = require("path");
 
 const WEB_ROOT = process.argv[2] || "C:/dev/macauPos/macauPosSystem";
-const NEXT_DIR = path.join(WEB_ROOT, ".next");
+/**
+ * Next 嘅 build 輸出目錄。預設 `.next`。
+ *
+ * 加 `NEXT_DIST_DIR` 覆寫係因為 2026-10-29 實測：本機 `.next` 被檔案鎖卡住，
+ * `next build` 會永遠停在「Running next.config.ts」之後（0 CPU、冇子進程）；
+ * 改用另一個 distDir（例如 `.next-build`）即刻正常。詳見 web 倉 next.config.ts。
+ */
+const NEXT_DIR = path.join(WEB_ROOT, process.env.NEXT_DIST_DIR || ".next");
 const OUT = path.resolve(__dirname, "..", "app", "src", "main", "assets", "web");
 
 /**

@@ -20,10 +20,15 @@ data class BtPrinterCandidate(
         .put("bonded", bonded)
 
     companion object {
+        /**
+         * ⚠️ Android 12+ 冇 BLUETOOTH_CONNECT 權限時 `device.name` 會拋 SecurityException。
+         * 呢個方法會被探索 receiver（主線程）呼叫 —— 一拋就係 app crash，
+         * 所以讀取一律 runCatching，寧可顯示 MAC 都唔可以炸。
+         */
         fun fromDevice(device: android.bluetooth.BluetoothDevice, bonded: Boolean): BtPrinterCandidate =
             BtPrinterCandidate(
-                address = device.address,
-                name = device.name,
+                address = runCatching { device.address }.getOrDefault(""),
+                name = runCatching { device.name }.getOrNull(),
                 bonded = bonded,
             )
     }

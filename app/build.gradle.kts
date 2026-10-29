@@ -77,8 +77,24 @@ android {
         //      廠商 AAR，`JobRunner` 只按 `cfg.connectionType` 分流 —— **本來就唔依賴
         //      Sunmi**，只有 `connectionType=="sunmi"` 才會叫 `SunmiPrinter`，
         //      而 web 客戶端從來唔會送呢個值（型別只有 lan/usb/bluetooth）。
-        versionCode = 14
-        versionName = "1.1.9"
+        // 1.2.0（code 15）：**藍牙真正可用** —— 1.1.9 有藍牙入口，但傳輸仍然只行廠商
+        //   AAR（無 timeout 保證、錯誤只有數字碼），而且未配對就完全冇路可走。
+        //   ① `BtPrinter` 改為**自家標準 SPP（RFCOMM）直連優先**：硬 timeout 15s、
+        //      1 KB 分塊 + 12ms 間隔（藍牙機 buffer 細，4 KB 連環寫會掉包）、
+        //      close 前 600ms drain（同 LAN 300ms 同一個道理：唔等就截尾）。
+        //      ⚠️ `BluetoothSocket.connect()` 唔響應 coroutine cancellation →
+        //      timeout 時一定要由另一 thread close() 條 socket 才中斷得開。
+        //   ② AAR 降為 fallback，而且「未配對／藍牙關／冇權限／MAC 錯」**唔再 fallback**
+        //      （呢幾種 AAR 必然救唔到，再等 6 秒只會令店員覺得掣失靈）。
+        //   ③ 新增 `PosNative.pairBtPrinter(address)`：app 內 `createBond()` + 監聽
+        //      BOND_STATE_CHANGED，結果經 `onBtPairResult` 回。POS 一體機嘅系統設定
+        //      好多時被廠商鎖住，逼店員跳出去配對 = 裝唔到機。
+        //   ④ `listBtPrinters` 無 BLUETOOTH_CONNECT 時回 `needsPermission:true`（舊版
+        //      只回空白清單，店員唔知要授權）；啟動時亦唔再預先彈藍牙權限，改為按需。
+        //   ⑤ `PrinterCfgDto` 只接受真 MAC 格式，唔再將裝置名（"POS-58"）當 address
+        //      塞落 `getRemoteDevice()`（會拋 IllegalArgumentException，訊息睇唔明）。
+        versionCode = 15
+        versionName = "1.2.0"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }

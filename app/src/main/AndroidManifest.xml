@@ -24,8 +24,24 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!--
+      neverForLocation：我哋只用藍牙搵打印機，唔會用嚟推斷位置。
+      冇呢個 flag，Android 12+ 會當你想用藍牙定位，部分 ROM 會額外要求定位權限。
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!--
+      🔴 Android 6–11（API 23–30）：`BluetoothAdapter.startDiscovery()` 系統**硬性**
+      要求 ACCESS_FINE_LOCATION，冇就靜默回空結果（唔 throw、唔報錯）。
+      POS 一體機好多仍然係 Android 7–9，唔加呢個權限 = 「永遠搜唔到新打印機」。
+      只影響「探索」；已配對嘅機照樣可以直接打印（唔使定位）。
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
 
     <!-- USB Host：外接 ESC/POS 打印機（required=false 令唔支援嘅機都裝到 app）。
          printer-lib AAR 會 declare required=true，merge 嗰陣會取嚴嘅值，

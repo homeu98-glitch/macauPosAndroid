@@ -187,7 +187,10 @@ class MainActivity : ComponentActivity() {
         // 仲係 lateinit 未初始化 → UninitializedPropertyAccessException 彈 app
         // （見 crash.txt 17:23:46）。擺喺後面個 JS callback 先收得到。
         maybeRequestNotifyPermission()
-        maybeRequestBtPermissions()
+        // 藍牙權限改為**按需**（2026-10-29）：只用 LAN 打印機嘅店，一開 app 就見兩個
+        // 「附近裝置」授權框，會以為 app 想偷聽。改由精靈撳「搜尋藍牙」時才請求
+        // （PosNative.listBtPrinters / scanBtPrinters 會回 needsPermission → web 再叫
+        //  requestBtPermission）。
     }
 
     /** launch 失敗嘅兜底 UI：顯示 exception 訊息 + stack，等用家睇得到、logcat 都執得到。 */
@@ -730,13 +733,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Android 12+ 需要 BLUETOOTH_SCAN / BLUETOOTH_CONNECT runtime 權限先可以用藍牙打印。 */
+    /**
+     * 藍牙 runtime 權限。
+     *
+     *  · Android 12+（API 31）：BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+     *  · Android 6–11（API 23–30）：探索需要 **ACCESS_FINE_LOCATION**
+     *    （系統硬性要求；冇就 startDiscovery() 靜默回空結果，店員只會見到「搵唔到機」）
+     *  · API < 23：唔使 runtime 權限
+     */
     private fun maybeRequestBtPermissions() {
-        if (Build.VERSION.SDK_INT < 31) return
-        val needed = arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT,
-        ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (Build.VERSION.SDK_INT < 23) return
+        val needed: List<String> = if (Build.VERSION.SDK_INT >= 31) {
+            listOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            )
+        } else {
+            listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), REQ_BT_PERMS)
     }
 
@@ -786,8 +800,16 @@ class MainActivity : ComponentActivity() {
                     "usb" -> if (t.usbVendorId == 0 || t.usbProductId == 0) {
                         return err("USB 打印機缺少 VID/PID（請先用 listUsbPrinters 揀機並儲存）")
                     }
-                    "bluetooth" -> if (t.bluetoothAddress.isNullOrBlank()) {
-                        return err("藍牙打印機缺少 address（請先用 listBtPrinters / scanBtPrinters 揀機並儲存）")
+                    "bluetooth" -> {
+                        if (t.bluetoothAddress.isNullOrBlank()) {
+                            return err("藍牙打印機缺少 MAC（請喺打印機精靈重新揀機並儲存）")
+                        }
+                        if (!btController.isEnabled()) {
+                            return err("藍牙未開啟，請喺通知欄／設定開啟藍牙再試")
+                        }
+                        if (!btController.hasConnectPermission()) {
+                            return err("未獲藍牙權限，請喺精靈撳「授權」再試")
+                        }
                     }
                     "sunmi" -> Unit
                     else -> if (t.ipAddress.isNullOrBlank() || t.lanPort <= 0) {
@@ -820,7 +842,11 @@ class MainActivity : ComponentActivity() {
                 // 預檢
                 when (printer.connectionType) {
                     "usb" -> if (printer.usbVendorId == 0 || printer.usbProductId == 0) return err("USB 打印機缺少 VID/PID")
-                    "bluetooth" -> if (printer.bluetoothAddress.isNullOrBlank()) return err("藍牙打印機缺少 address")
+                    "bluetooth" -> {
+                        if (printer.bluetoothAddress.isNullOrBlank()) return err("藍牙打印機缺少 MAC（請重新揀機）")
+                        if (!btController.isEnabled()) return err("藍牙未開啟，請先開啟藍牙")
+                        if (!btController.hasConnectPermission()) return err("未獲藍牙權限，請先授權")
+                    }
                     "sunmi" -> Unit
                     else -> if (printer.ipAddress.isNullOrBlank()) return err("缺 ipAddress")
                 }
@@ -856,6 +882,9 @@ class MainActivity : ComponentActivity() {
                 .put("localIp", localIp)
                 .put("companionPort", NativeCompanionServer.PORT)
                 .put("companionListening", companion.isListening())
+                // 診斷用：supported / enabled / connectPermission / scanPermission / bondedCount
+                // 真機裝機時一眼分得出「冇藍牙硬件」定「未開藍牙」定「未授權」。
+                .put("bluetooth", runCatching { btController.stateJson() }.getOrNull())
                 .toString()
         }
 
@@ -904,12 +933,49 @@ class MainActivity : ComponentActivity() {
                 .put("vendorId", vid).put("productId", pid).toString()
         }
 
-        /** 藍牙：列出已配對設備。 */
+        /**
+         * 藍牙：列出已配對設備。
+         *
+         * Android 12+ 冇 BLUETOOTH_CONNECT 權限時 `bondedDevices` 會拋 SecurityException。
+         * 舊版靠 try/catch 回 `ok:false`，但 web 側只當「冇機」→ 店員見到空白清單，
+         * 完全唔知要授權。而家明確回 `needsPermission:true`，由精靈彈授權。
+         */
         @JavascriptInterface
         fun listBtPrinters(): String = try {
-            JSONObject().put("ok", true).put("printers", JSONArray(btController.bondedJson())).toString()
+            if (!btController.hasConnectPermission()) {
+                // 店員撳「搜尋藍牙」就代表要用藍牙 → 即刻彈授權，唔好靜靜回空清單。
+                // 授權結果經 onBtPermissionResult → wizard 會自動重試掃描。
+                //
+                // ⚠️ @JavascriptInterface 喺 WebView 嘅 JavaBridge 線程執行（唔係 UI 線程），
+                // 而 requestPermissions 一定要主線程 → 一定要 runOnUiThread，否則可能
+                // 靜靜失敗（唔彈授權框，店員只見到空清單）。
+                runOnUiThread { maybeRequestBtPermissions() }
+                JSONObject()
+                    .put("ok", false)
+                    .put("needsPermission", true)
+                    .put("error", "需要藍牙權限")
+                    .put("printers", JSONArray())
+                    .toString()
+            } else {
+                JSONObject()
+                    .put("ok", true)
+                    .put("printers", JSONArray(btController.bondedJson()))
+                    .put("bluetooth", btController.stateJson())
+                    .toString()
+            }
         } catch (e: Exception) {
             JSONObject().put("ok", false).put("error", e.message ?: "listBtPrinters 失敗").toString()
+        }
+
+        /**
+         * 藍牙：喺 app 內配對（createBond）。結果經 `onBtPairResult` 回調。
+         *
+         * POS 一體機嘅系統設定好多時被廠商鎖住 → 唔可以逼店員跳出去配對。
+         */
+        @JavascriptInterface
+        fun pairBtPrinter(address: String): String {
+            btController.pair(address)
+            return JSONObject().put("ok", true).put("pairing", true).toString()
         }
 
         /** 藍牙：開始探索（結果經 onBtPrinterFound 回調）。需要 BLUETOOTH_SCAN（Android 12+）。 */
@@ -929,7 +995,8 @@ class MainActivity : ComponentActivity() {
         /** 藍牙：觸發 runtime 授權（Android 12+）。結果經 onBtPermissionResult 回調。 */
         @JavascriptInterface
         fun requestBtPermission(): String {
-            maybeRequestBtPermissions()
+            // JS bridge 唔喺 UI 線程 → requestPermissions 一定要轉主線程
+            runOnUiThread { maybeRequestBtPermissions() }
             return JSONObject().put("ok", true).put("requested", true).toString()
         }
 

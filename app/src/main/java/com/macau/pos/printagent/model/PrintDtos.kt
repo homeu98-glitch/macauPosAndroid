@@ -255,6 +255,20 @@ data class PrinterCfgDto(
          * 解析 USB VID/PID：web 可能送 number、decimal string、或 hex string（"0x04B8"）。
          * 統一轉成 Int，避免 web 用 hex 顯示但 Android optInt 解唔到 → 變 0。
          */
+        private val MAC_RE = Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+        /**
+         * 只接受真正 MAC（AA:BB:CC:DD:EE:FF）。
+         *
+         * ⚠️ 舊版會 fallback 落 `bluetoothName`，例如收到 "POS-58" 都照塞入
+         * `bluetoothAddress` → `getRemoteDevice("POS-58")` 拋 IllegalArgumentException，
+         * 錯誤訊息完全睇唔明。寧可當「缺少 address」，由 PosNative 預檢叫店員重新揀機。
+         */
+        private fun parseMac(vararg candidates: String?): String? = candidates
+            .mapNotNull { it?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            .firstOrNull { MAC_RE.matches(it) }
+            ?.uppercase()
+
         private fun parseId(value: Any?): Int {
             if (value == null) return 0
             if (value is Number) return value.toInt()
@@ -281,8 +295,11 @@ data class PrinterCfgDto(
             kanjiEnlarge = o.optString("kanjiEnlarge").takeIf { it.isNotBlank() },
             usbVendorId = parseId(o.opt("usbVendorId")),
             usbProductId = parseId(o.opt("usbProductId")),
-            bluetoothAddress = o.optString("bluetoothAddress").takeIf { it.isNotBlank() }
-                ?: o.optString("bluetoothName").takeIf { it.isNotBlank() },
+            bluetoothAddress = parseMac(
+                o.optString("bluetoothAddress"),
+                // 舊版 web 可能只送名；只有佢剛好係 MAC 格式先接受
+                o.optString("bluetoothName"),
+            ),
             family = o.optString("family").takeIf { it.isNotBlank() },
             // 0 視為「未填」（mm 寬度唔可能係 0），與 web 側 null 語意一致。
             maxLabelWidthMm = o.optInt("maxLabelWidthMm", 0).takeIf { it > 0 },

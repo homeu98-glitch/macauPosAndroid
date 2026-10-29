@@ -87,7 +87,7 @@ object SdkPrinter {
         else -> "${cfg.ipAddress ?: ""},${cfg.lanPort}"
     }
 
-    /** LAN 先試 raw socket；USB / 藍牙 / Sunmi 一定要經 SDK。 */
+    /** LAN 先試 raw socket；USB / Sunmi 一定要經 SDK。藍牙另有直連 SPP（見 printViaBt）。 */
     private fun canUseRaw(cfg: PrinterCfgDto): Boolean =
         (cfg.connectionType == "lan" || cfg.connectionType == "ethernet") &&
             !cfg.ipAddress.isNullOrBlank()
@@ -164,6 +164,11 @@ object SdkPrinter {
         cfg: PrinterCfgDto,
         bytes: ByteArray,
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        // 藍牙：先走自己嘅標準 SPP（有硬 timeout、錯誤講人話），失敗才 fallback AAR。
+        // 唔可以一開始就落 AAR —— 佢冇 timeout 保證，P2 已證實會令 UI 永久轉圈。
+        if (cfg.connectionType == "bluetooth") {
+            return@withContext printViaBt(context, cfg, bytes)
+        }
         if (canUseRaw(cfg)) {
             val ip = cfg.ipAddress!!
             val port = if (cfg.lanPort > 0) cfg.lanPort else 9100
@@ -185,7 +190,50 @@ object SdkPrinter {
         printViaSdk(context, cfg, bytes)
     }
 
-    /** 經廠商 AAR 送紙（USB / 藍牙 / LAN fallback 都行呢條）。 */
+    /**
+     * 藍牙：標準 SPP 直連優先，失敗才 fallback 廠商 AAR。
+     *
+     * 為何唔直接靠 AAR：`POSConnect` 嘅 connect callback **冇 timeout 保證**（見檔頭），
+     * 而且錯誤只有一個數字碼，分唔清「未配對」同「藍牙未開」。自家 SPP 層可以
+     * 準確報錯 + 15s 硬上限，店員知道要點做。
+     */
+    private suspend fun printViaBt(
+        context: Context,
+        cfg: PrinterCfgDto,
+        bytes: ByteArray,
+    ): Result<Unit> {
+        val address = cfg.bluetoothAddress?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(IOException("藍牙打印機缺少 address（請喺精靈重新揀機）"))
+
+        val direct = BtPrinter(context.applicationContext).printBytes(address, bytes)
+        if (direct.isSuccess) return direct
+
+        val err = direct.exceptionOrNull()
+        val code = (err as? BtPrinter.BtPrintError)?.code
+        // 呢幾種情況 AAR 都必然救唔到（未配對／藍牙關／冇權限／MAC 錯），
+        // 再等 6 秒 SDK timeout 只會令店員覺得「撳咗冇反應」。
+        if (code == BtPrinter.BT_NOT_BONDED ||
+            code == BtPrinter.BT_DISABLED ||
+            code == BtPrinter.BT_NEEDS_PERMISSION ||
+            code == BtPrinter.BT_UNSUPPORTED ||
+            code == BtPrinter.BT_BAD_ADDRESS
+        ) {
+            return direct
+        }
+
+        val sppErr = err?.message ?: "未知錯誤"
+        Log.w(TAG, "藍牙 SPP 失敗（$address）：$sppErr，改行 SDK")
+        val sdk = printViaSdk(context, cfg, bytes)
+        return if (sdk.isSuccess) {
+            Result.success(Unit)
+        } else {
+            Result.failure(
+                IOException("兩種藍牙通道都失敗｜直連：$sppErr｜SDK：${sdk.exceptionOrNull()?.message}")
+            )
+        }
+    }
+
+    /** 經廠商 AAR 送紙（USB / 藍牙 fallback / LAN fallback 都行呢條）。 */
     private suspend fun printViaSdk(
         context: Context,
         cfg: PrinterCfgDto,
