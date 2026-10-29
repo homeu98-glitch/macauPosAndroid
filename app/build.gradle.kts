@@ -93,8 +93,19 @@ android {
         //      只回空白清單，店員唔知要授權）；啟動時亦唔再預先彈藍牙權限，改為按需。
         //   ⑤ `PrinterCfgDto` 只接受真 MAC 格式，唔再將裝置名（"POS-58"）當 address
         //      塞落 `getRemoteDevice()`（會拋 IllegalArgumentException，訊息睇唔明）。
-        versionCode = 15
-        versionName = "1.2.0"
+        // 1.2.1（code 16）：**離線登入**（P4）—— 斷網都開得工。
+        //   ① 新增 `offline-credential.ts`：聯網登入成功時，用**本機隨機 salt** 派生
+        //      PBKDF2 驗證器存落 localStorage（唔存 server 嘅 pinHash，dump 走部機都
+        //      只影響本部機一個身份）。
+        //   ② 冷啟仍然要揀身份 + 打 PIN（保留 docs/162：唔會靜靜接手上一手權限）。
+        //   ③ 憑證 7 日到期、錯 5 次鎖 5 分鐘（計數存喺憑證，refresh 都唔會重設）。
+        //   ④ 只有「連唔到 server」才走離線；server 明確拒絕（PIN 錯／停用／撤銷）
+        //      一定照 server 講。
+        //   ⑤ `fetchLoginIdentities` 加 5 秒硬逾時 —— 舊版斷網會永遠卡喺
+        //      「正在讀取可用身份…」。
+        //   ⚠️ 離線 bundle 亦已用 P4 之後嘅 build 重打包（BUILD_ID TTmnJuFb）。
+        versionCode = 16
+        versionName = "1.2.1"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }
