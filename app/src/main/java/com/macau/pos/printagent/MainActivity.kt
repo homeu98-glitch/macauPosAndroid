@@ -706,6 +706,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         ui.removeCallbacks(loadWatchdog)
+        // v1.1.9：掃描途中關 app 一定要收工。否則 254 個 host 嘅 socket 會繼續跑，
+        // 完成後仲會 callJs 落一個已銷毀嘅 WebView（evaluateJavascript 會掟）。
+        runCatching { lanScanJob?.cancel() }
+        lanScanJob = null
         // setup() 有機會喺 lateinit 全部 assign 之前就掟嘢，呢度逐個 guard，
         // 唔可以 uninitialized access 再彈多次（掩蓋咗原本嘅 crash）。
         if (::companion.isInitialized) runCatching { companion.stop() }
@@ -1056,7 +1060,9 @@ class MainActivity : ComponentActivity() {
         // UsbController/BtController callback）都有可能未初始化。一定要 guard，
         // 唔可以 UninitializedPropertyAccessException 彈 app（見 crash.txt）。
         if (!::webView.isInitialized) return
-        webView.post { webView.evaluateJavascript(script, null) }
+        // runCatching：WebView 已 destroy（例如掃描途中有結果返嚟）時
+        // evaluateJavascript 會掟 IllegalStateException，唔可以令 app 彈。
+        webView.post { runCatching { webView.evaluateJavascript(script, null) } }
     }
 
     /** 安全呼叫 WebView 全局函數（未定義唔會掟 ReferenceError）。 */
