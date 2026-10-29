@@ -36,9 +36,37 @@ android {
         //    `isCompanionAvailable(true)` 閘，否則 USB 掃描精靈喺 Android 上短路；
         // ④ `PrinterCfgDto` 補 family/max|minLabelWidthMm；
         // ⑤ `EscPosPrinter.printRaw` 寫完等 300ms 才收 socket（對齊 desktop printLan，修大單截斷）。
+        // v1.1.6（code 11）：**白屏診斷層** —— 門店回報「裝咗 APK 開到空白、冇反應」，
+        // 但同一部機瀏覽器開網頁版正常；實測下載到嘅 APK 就係 1.1.5（SHA256 一致），
+        // 即係環境問題（網絡／WebView／JS），而舊版對失敗**完全靜默**，現場冇任何線索。
+        // ① `PosClient` 監聽主文檔 onReceivedError / onReceivedHttpError / onReceivedSslError
+        //    → 一律轉去 APK 內置嘅本地診斷頁（顯示錯誤碼、URL、WebView 版本、網絡狀態）；
+        // ② 「載入完成但 DOM 空白」探針（12 秒後查元素數／可見文字）→ 專治 JS 跑唔到嘅白屏；
+        // ③ 本地頁 6 秒都渲染唔到 → 原生 TextView 兜底（證明 WebView 組件本身壞）；
+        // ④ 開機寫 logcat（tag PRINTAGENT_ENV / PRINTAGENT_WEB）記錄 WebView 版本、UA、
+        //    網絡狀態、POS 所有 console 訊息。
+        // v1.1.7（code 12）：**P1 離線開機** —— 把 web POS 嘅 production build 打包入
+        // `assets/web/`（由 `tools/bundle-web.cjs` 生成，5 條 route：/ /login /pos
+        // /select-workbench /retail，約 4.4 MB），線上載入失敗時自動切換：
+        //   ① 仍然用同一個 origin（BuildConfig.POS_URL）載入，只喺 shouldInterceptRequest
+        //      將 GET 交本地 assets → localStorage / session / 打印機設定全部保留；
+        //   ② `/api/*` **唔攔截**（斷網時 fetch 即刻失敗，交返 app 自己嘅 localStorage fallback）；
+        //   ③ 未打包嘅 route（會員／報表／庫存）→ 本地「呢個功能需要網絡」提示頁；
+        //   ④ 離線時左下角顯示「離線模式 · 點此重試上線」標記。
+        // ⚠️ APK 體積會由 ~3.4 MB 增至 ~7.5 MB（bundle 佔 4.4 MB）。
         // ⚠️ 版本號一定要擰：門店靠呢個分辨「到底裝咗邊個 build」（改咗唔重裝 = 行為零變化）。
-        versionCode = 10
-        versionName = "1.1.5"
+        // 1.1.8（code 13）：修離線模式三處 ——
+        //   ① 靜態資源映射：`/_next/static/x` 曾經被拼成 `next-static/static/x`（多一層），
+        //      所有 JS／CSS 都開唔到 → React 唔 mount → 畫面得返「離線模式」徽章
+        //      （實測 DOM 只有 44 粒、可見文字 13 字，正好就係徽章文字）；
+        //   ② `/sw.js` 改為回應一個「唔快取」空殼 SW（避免換版 APK 後 SW cache 餵舊 chunk）；
+        //   ③ `/favicon.ico` 等子資源唔再誤當 route 去搵 `xxx.html`；
+        //   ④ 離線徽章注入加 `document.body` 守衛（`/`→`/login` 換頁中會 body=null）；
+        //   ⑤ 每頁 `<head>` 注入 SW shim，令 `serviceWorker.register()` 變 no-op
+        //      （WebView 嘅 SW 請求唔經 shouldInterceptRequest，離線必失敗）。
+        //   離線包由 5 條 route 擴到 15 條（點餐／訂單／沽清／交班／打印／餐牌／設定）。
+        versionCode = 13
+        versionName = "1.1.8"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }

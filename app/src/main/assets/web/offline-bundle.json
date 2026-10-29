@@ -1,0 +1,23 @@
+{
+  "buildId": "ldGMpyMKvuaKFUvQDH1uy",
+  "bundledAt": "2026-10-29T07:21:43.428Z",
+  "source": "C:\\dev\\macauPos\\macauPosSystem\\.next",
+  "routes": [
+    "index",
+    "login",
+    "select-workbench",
+    "pos",
+    "retail",
+    "orders",
+    "order",
+    "quick",
+    "operator",
+    "prints",
+    "soldout",
+    "shift",
+    "settings",
+    "menu",
+    "kitchen"
+  ],
+  "note": "離線 fallback 用。線上正常載入時唔會用到呢份 bundle。"
+}
