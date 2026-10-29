@@ -40,6 +40,7 @@ import com.macau.pos.printagent.relay.RelayState
 import com.macau.pos.printagent.usb.UsbController
 import com.macau.pos.printagent.bt.BtController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -76,6 +77,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var companion: NativeCompanionServer
     private lateinit var usbController: UsbController
     private lateinit var btController: BtController
+
+    /**
+     * 進行中嘅 LAN 掃描 job（v1.1.9／P3）。
+     *
+     * 保留一個 handle 係為咗：① 重複按「搜尋」唔會開兩條 254 個 host 嘅掃描
+     * （每條 64 並發 = 128 條 socket，開兩條會拖死部機）；② 離開設定頁時
+     * 可以 `stopLanScan()` 即刻收工，唔會喺背景繼續掃。
+     */
+    private var lanScanJob: Job? = null
 
     // ── v1.1.6 診斷（白屏排查）──────────────────────────────────────────
     // 背景：門店回報「裝咗 APK 開到空白、冇反應」，但同一部機瀏覽器開網頁版正常。
@@ -143,6 +153,15 @@ class MainActivity : ComponentActivity() {
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.databaseEnabled = true
+        // v1.1.9（P3 驗證）：**只喺 debug build** 開 WebView 遠端除錯。
+        // 用途：經 `adb forward` + Chrome DevTools Protocol 直接喺頁面執行
+        // `window.PosNative.testPrint(...)`，做「唔靠登入、唔靠 UI」嘅出紙驗證
+        // （門店真正嘅痛點係「斷網／未登入時印唔印得出」，唔係 UI 有冇撳到）。
+        // ⚠️ release build 一定係 false：CDP 可以完全控制頁面（讀 localStorage 嘅
+        //    session／打印機設定），唔應該喺出貨版開啟。`BuildConfig.DEBUG` 保證咗呢點。
+        if (BuildConfig.DEBUG) {
+            runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+        }
         // POS 喺 HTTPS；native 要允許佢打 loopback HTTP（:9311/api/health 探測）。
         webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         webView.webChromeClient = object : WebChromeClient() {
@@ -929,6 +948,100 @@ class MainActivity : ComponentActivity() {
             val reachable = companion.probeLanBlocking(target, p)
             return JSONObject().put("ok", true).put("ip", target).put("port", p)
                 .put("reachable", reachable).toString()
+        }
+
+        /**
+         * LAN：掃描整個網段（1–254），列出有開 9100／631／80 嘅主機。
+         *
+         * ─────────────────────────────────────────────────────────────
+         * 為何要（2026-10-29 · P3「打印脫離 Sunmi」）
+         * ─────────────────────────────────────────────────────────────
+         * 換走 Sunmi 一體機之後，門店用嘅係普通 Android 平板／盒仔 ＋ **網絡打印機**。
+         * 舊版 PosNative 只匯出 `probeLan(ip, port)` —— 即係店員要**自己知打印機 IP**
+         * 先裝得到機。而打印機 IP 通常係 DHCP 派、機身又冇顯示，結果就係「裝唔到」。
+         *
+         * [LanScanner] 早就寫好（64 並發、讀 ARP 攞 MAC、帶進度），但一直只經
+         * [NativeCompanionServer] 嘅桌面端點用，Android 側從來冇匯出過。
+         * 呢個方法就係把它接上 `window.PosNative`。
+         *
+         * 非同步：掃 254 個 host 要 2–4 秒，唔可以阻塞 JS 執行緒（`@JavascriptInterface`
+         * 係喺 WebView 嘅 JS thread 上跑）。所以立即回 `{ok,scanning,subnet}`，
+         * 進度／結果經回呼返：
+         *   · `window.__onLanScanProgress({checked,total,found,subnet})`
+         *   · `window.__onLanScanResult({ok,subnet,hits:[{ip,mac,openPorts,hostname}]})`
+         *
+         * ⚠️ 進度回呼**節流**：LanScanner 每個 host 都 call 一次（254 次），
+         * 每次都 evaluateJavascript 會令 WebView 忙住跑 JS，反而拖慢掃描。
+         * 所以每 10 個 host（或搵到新機）才報一次。
+         */
+        @JavascriptInterface
+        fun scanLanPrinters(): String {
+            if (lanScanJob?.isActive == true) {
+                return JSONObject().put("ok", true).put("scanning", true).put("already", true).toString()
+            }
+            val prefix = runCatching { scanner.detectSubnetPrefix() }.getOrNull()
+                ?: return JSONObject().put("ok", false)
+                    .put("error", "拎唔到本機 IP —— 請確認已連上同一個 Wi-Fi／網線").toString()
+
+            lanScanJob = lifecycleScope.launch {
+                var lastReportedChecked = 0
+                var lastReportedFound = -1
+                try {
+                    val hits = scanner.scanSubnet(prefix) { p ->
+                        if (p.checked - lastReportedChecked >= 10 || p.found != lastReportedFound) {
+                            lastReportedChecked = p.checked
+                            lastReportedFound = p.found
+                            callJs(
+                                "__onLanScanProgress",
+                                JSONObject()
+                                    .put("checked", p.checked)
+                                    .put("total", p.total)
+                                    .put("found", p.found)
+                                    .put("subnet", p.subnetPrefix)
+                                    .toString(),
+                            )
+                        }
+                    }
+                    val arr = JSONArray()
+                    for (h in hits) {
+                        val ports = JSONArray()
+                        for (pt in h.openPorts) ports.put(pt)
+                        arr.put(
+                            JSONObject()
+                                .put("ip", h.ip)
+                                .put("mac", h.mac ?: "")
+                                .put("openPorts", ports)
+                                .put("hostname", h.hostname ?: ""),
+                        )
+                    }
+                    callJs(
+                        "__onLanScanResult",
+                        JSONObject().put("ok", true).put("subnet", prefix).put("hits", arr).toString(),
+                    )
+                } catch (e: Throwable) {
+                    // CancellationException 都要走到呢度：UI 收到 ok=false 就會停轉圈。
+                    callJs(
+                        "__onLanScanResult",
+                        JSONObject()
+                            .put("ok", false)
+                            .put("subnet", prefix)
+                            .put("error", e.message ?: "掃描中斷")
+                            .put("hits", JSONArray())
+                            .toString(),
+                    )
+                } finally {
+                    lanScanJob = null
+                }
+            }
+            return JSONObject().put("ok", true).put("scanning", true).put("subnet", prefix).toString()
+        }
+
+        /** LAN：停止掃描（離開設定頁／重開精靈時叫）。 */
+        @JavascriptInterface
+        fun stopLanScan(): String {
+            lanScanJob?.cancel()
+            lanScanJob = null
+            return JSONObject().put("ok", true).put("scanning", false).toString()
         }
     }
 

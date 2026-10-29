@@ -65,8 +65,20 @@ android {
         //   ⑤ 每頁 `<head>` 注入 SW shim，令 `serviceWorker.register()` 變 no-op
         //      （WebView 嘅 SW 請求唔經 shouldInterceptRequest，離線必失敗）。
         //   離線包由 5 條 route 擴到 15 條（點餐／訂單／沽清／交班／打印／餐牌／設定）。
-        versionCode = 13
-        versionName = "1.1.8"
+        // 1.1.9（code 14）：**P3 打印脫離 Sunmi** —— 補兩項裝機能力：
+        //   ① `PosNative.scanLanPrinters()` / `stopLanScan()`：把一直只供 desktop
+        //      用的 `LanScanner`（掃 /24、port 9100/631/80、64 並發、讀 ARP 攞 MAC）
+        //      接上 Android bridge → 店員唔使再手填打印機 IP（DHCP 派、機身冇顯示 =
+        //      實際裝唔到機）。進度／結果經 `__onLanScanProgress` / `__onLanScanResult` 回。
+        //   ② 藍牙打印機本來喺 APK 側已完整支援（listBtPrinters / scanBtPrinters /
+        //      SdkPrinter 嘅 BLUETOOTH 分支），但 web 精靈冇藍牙入口 → 今次配合
+        //      `printer-wizard-modal.tsx` 新增藍牙連接方式（見 web 倉）。
+        //   ③ 傳輸層審計結論：`SdkPrinter` 一向 LAN 走 raw socket 9100、USB／藍牙走
+        //      廠商 AAR，`JobRunner` 只按 `cfg.connectionType` 分流 —— **本來就唔依賴
+        //      Sunmi**，只有 `connectionType=="sunmi"` 才會叫 `SunmiPrinter`，
+        //      而 web 客戶端從來唔會送呢個值（型別只有 lan/usb/bluetooth）。
+        versionCode = 14
+        versionName = "1.1.9"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }
