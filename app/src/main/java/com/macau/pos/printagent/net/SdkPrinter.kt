@@ -144,12 +144,8 @@ object SdkPrinter {
         paymentMethod: String?,
         total: Double?,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        val bytes = when {
-            job.template != null -> EscPosRenderer.renderTemplateTicket(job, cfg)
-            kind == "receipt" -> EscPosRenderer.renderReceiptTicket(job, cfg, storeName, paymentMethod, total)
-            kind == "test" -> EscPosRenderer.renderTestPage(cfg, storeName)
-            else -> EscPosRenderer.renderKitchenTicket(job, cfg, storeName)
-        }
+        // 2026-10-30：統一由 TicketRenderer 分派（標籤機行 TSPL，票據機繼續行 ESC/POS）。
+        val bytes = TicketRenderer.renderTicket(job, cfg, kind, storeName, paymentMethod, total)
         printBytes(context, cfg, bytes)
     }
 

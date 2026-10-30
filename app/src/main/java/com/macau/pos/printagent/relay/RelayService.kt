@@ -61,6 +61,17 @@ class RelayService : Service() {
     private var lastHeartbeatAt = 0L
     private var lastNotifText = ""
 
+    /**
+     * 對帳（claim）間隔，**由 server 話事**。
+     *
+     * 2026-10-30 起：server `claim` 回傳 `nextPollMs`（空閒退避 30→60→120→180s），
+     * 我哋跟住退避 ⇒ 打烊之後唔會再每 30 秒打一次 server。
+     * 有單嗰陣 server 自然會返細值；Realtime wake-up 亦會即刻 drain，
+     * 所以退避**唔會**令出紙變慢。
+     */
+    @Volatile
+    private var reconcileMs = RECONCILE_MS
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -150,13 +161,16 @@ class RelayService : Service() {
 
         val now = System.currentTimeMillis()
         val wokeUp = RelayState.lastWakeAt > lastDrainAt
-        val stale = now - lastDrainAt > RECONCILE_MS
+        val stale = now - lastDrainAt > reconcileMs
         if (wokeUp || stale) {
             drainNow()
             lastDrainAt = System.currentTimeMillis()
         }
 
-        if (now - lastHeartbeatAt > HEARTBEAT_MS) {
+        // 心跳跟埋同一條節奏：server 退避到 180s 時，心跳都退避到 180s。
+        // （server 而家 claim 已經順便蓋 last_seen_at，心跳淨係用嚟帶
+        //   appVersion / printedCount 呢啲額外資訊，唔需要高頻。）
+        if (now - lastHeartbeatAt > maxOf(HEARTBEAT_MS, reconcileMs)) {
             heartbeat()
             lastHeartbeatAt = now
         }
@@ -188,9 +202,21 @@ class RelayService : Service() {
 
     private suspend fun drainNow() {
         val r = JobRunner.drain(this, prefs, api, BuildConfig.POS_URL)
+        // 認領失敗時一定要打返去預設 30s：server 可能因為故障冇回 nextPollMs，
+        // 留喺退避到 180s 嘅值上面會令故障期間兜底 drain 都變慢。
         when {
-            r.error != null -> RelayState.note("認領失敗：${r.error}")
-            r.claimed > 0 -> RelayState.note("處理 ${r.claimed} 張（成功 ${r.sent}／失敗 ${r.failed}）")
+            r.error != null -> {
+                reconcileMs = RECONCILE_MS
+                RelayState.nextPollInMs = reconcileMs
+                RelayState.note("認領失敗：${r.error}")
+            }
+            else -> {
+                r.nextPollMs?.let { server ->
+                    reconcileMs = server.coerceIn(MIN_RECONCILE_MS, MAX_RECONCILE_MS)
+                }
+                RelayState.nextPollInMs = reconcileMs
+                if (r.claimed > 0) RelayState.note("處理 ${r.claimed} 張（成功 ${r.sent}／失敗 ${r.failed}）")
+            }
         }
     }
 
@@ -302,8 +328,11 @@ class RelayService : Service() {
 
         /** 主 tick：1s。唔係 polling —— 淨係用嚟判定「有冇 wake-up / 到唔到對帳時間」。 */
         private const val TICK_MS = 1_000L
-        /** 對帳：Realtime 斷線／漏 event 時嘅兜底 drain 間隔。 */
+        /** 對帳：Realtime 斷線／漏 event 時嘅兜底 drain 間隔（**server 可用 nextPollMs 覆寫**）。 */
         private const val RECONCILE_MS = 30_000L
+        /** 上下限：唔好信到 server 畀 0ms 或者 1 個鐘。 */
+        private const val MIN_RECONCILE_MS = 5_000L
+        private const val MAX_RECONCILE_MS = 300_000L
         private const val HEARTBEAT_MS = 60_000L
 
         fun start(context: Context) {

@@ -104,8 +104,23 @@ android {
         //   ⑤ `fetchLoginIdentities` 加 5 秒硬逾時 —— 舊版斷網會永遠卡喺
         //      「正在讀取可用身份…」。
         //   ⚠️ 離線 bundle 亦已用 P4 之後嘅 build 重打包（BUILD_ID TTmnJuFb）。
-        versionCode = 16
-        versionName = "1.2.1"
+        // 1.2.2（code 17）：**缺口收尾**（2026-10-30）
+        //   ① `Theme.PosPrinterDemo` → `Theme.MacauPos`（Eric demo 遺留名；manifest 同步）。
+        //   ② Relay 跟 server `nextPollMs` 退避（空閒 30→60→120→180s）：對帳間隔由
+        //      server 話事（`RelayApi.ClaimResult.nextPollMs`），心跳跟同一條節奏；
+        //      認領失敗即刻打返預設 30s（避免 server 故障期間連兜底都變慢）。
+        //      一律夾喺 5s–300s —— 唔好盲信 server 畀 0ms 或者成個鐘。
+        //   ③ **TSPL 標籤機第一版**：新增 `TsplRenderer`，`TicketRenderer` 統一咗
+        //      路徑 A（`SdkPrinter.print`）同路徑 B（`JobRunner.render`）兩個出入口。
+        //      `printer.family == "label"` 才走 TSPL —— 之前 `EscPosRenderer` 對 family
+        //      一律零消費 ⇒ 漢印 SL42（100×75mm）被排成 80mm 連續紙＝出紙亂版。
+        //      ⚠️ **未經實機**：依賴機體 CJK 點陣字（`TSS16.BF2` / `TSS24.BF2`）+
+        //      `CODEPAGE UTF-8`；超出標籤高度嘅內容會截断並 `Log.w`。
+        //   ④ 離線登入後「恢復網絡要重新登入」橫幅喺 web 端（macauPosSystem `e147652`），
+        //      本版 bundle 由嗰個 build 重新打包 ⇒ APK 同線上一致。
+        //   ⑤ 已核實 `pos_release_versions` 對外回 **1.2.1**（早前「誤報 1.0.1」唔再存在）。
+        versionCode = 17
+        versionName = "1.2.2"
 
         buildConfigField("String", "POS_URL", "\"https://macau-pos-system.vercel.app\"")
     }

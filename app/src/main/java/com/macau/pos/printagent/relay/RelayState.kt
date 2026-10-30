@@ -24,6 +24,13 @@ object RelayState {
     @Volatile
     var lastHeartbeatAt: Long = 0L
 
+    /**
+     * 目前嘅對帳間隔（ms），由 server `nextPollMs` 決定（`RelayService.reconcileMs` 嘅鏡像）。
+     * 淨係畀 RelayActivity 顯示 —— 店員／我哋一眼睇到「server 叫我幾耐 query 一次」。
+     */
+    @Volatile
+    var nextPollInMs: Long = 30_000L
+
     @Volatile
     var printedCount: Int = 0
 
@@ -63,6 +70,7 @@ object RelayState {
         lastWakeAt = 0L
         lastClaimAt = 0L
         lastHeartbeatAt = 0L
+        nextPollInMs = 30_000L
         printedCount = 0
         failedCount = 0
         lastMessage = ""

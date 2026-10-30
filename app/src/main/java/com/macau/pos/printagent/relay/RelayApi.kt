@@ -50,6 +50,17 @@ class RelayApi {
         val jobs: List<JSONObject>,
         val printers: List<JSONObject>,
         val error: String?,
+        /**
+         * 伺服器建議嘅下次輪詢間隔（ms）。
+         *
+         * Server 端 `claim/route.ts`（2026-09-22 起）會按**空閒次數退避**：
+         * 30s → 60s → 120s → 180s（關店後自動減請求），有單就即刻返細值。
+         * 舊版 client 完全忽略呢個欄位 → server 嘅退避對我哋無效。
+         *
+         * ⚠️ 用 `Long?` 而非 `optLong(...)`：server 未開呢個功能／整數溢位時要分得開
+         * 「server 冇講」同「server 話 0」。
+         */
+        val nextPollMs: Long? = null,
     )
 
     /** 配對輪詢（未配對時每 3s call 一次，配對完就停）。 */
@@ -116,7 +127,10 @@ class RelayApi {
         if (err != null) return ClaimResult(emptyList(), emptyList(), err)
         val jobs = resp.optJSONArray("jobs")?.toObjectList() ?: emptyList()
         val printers = resp.optJSONArray("printers")?.toObjectList() ?: emptyList()
-        return ClaimResult(jobs, printers, null)
+        val nextPollMs = resp.takeIf { it.has("nextPollMs") }
+            ?.optLong("nextPollMs", -1L)
+            ?.takeIf { it > 0L }
+        return ClaimResult(jobs, printers, null, nextPollMs)
     }
 
     /** 回報單張結果；失敗時帶 error 文字（server 會寫 last_error，attempts<5 會返 pending 重試）。 */

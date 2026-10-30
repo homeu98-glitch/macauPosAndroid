@@ -5,6 +5,7 @@ import android.util.Log
 import com.macau.pos.printagent.model.PrintJobDto
 import com.macau.pos.printagent.model.PrinterCfgDto
 import com.macau.pos.printagent.net.EscPosRenderer
+import com.macau.pos.printagent.net.TicketRenderer
 import com.macau.pos.printagent.net.SdkPrinter
 import com.macau.pos.printagent.net.SunmiPrinter
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +30,14 @@ object JobRunner {
     private const val CLAIM_LIMIT = 5
     private const val MAX_COPIES = 5
 
-    data class DrainResult(val claimed: Int, val sent: Int, val failed: Int, val error: String?)
+    data class DrainResult(
+        val claimed: Int,
+        val sent: Int,
+        val failed: Int,
+        val error: String?,
+        /** server 建議嘅下次對帳間隔（ms）；冇就 keep client 預設。詳見 `RelayApi.ClaimResult`。 */
+        val nextPollMs: Long? = null,
+    )
 
     suspend fun drain(
         context: Context,
@@ -45,7 +53,8 @@ object JobRunner {
 
         val res = api.claim(baseUrl, agentId, token, storeId, CLAIM_LIMIT)
         if (res.error != null) return@withContext DrainResult(0, 0, 0, res.error)
-        if (res.jobs.isEmpty()) return@withContext DrainResult(0, 0, 0, null)
+        // 🔴 就算冇單都要帶返 nextPollMs —— 空閒先至係 server 想我哋退避嘅時候。
+        if (res.jobs.isEmpty()) return@withContext DrainResult(0, 0, 0, null, res.nextPollMs)
 
         var sent = 0
         var failed = 0
@@ -78,7 +87,7 @@ object JobRunner {
                 err,
             )
         }
-        DrainResult(res.jobs.size, sent, failed, null)
+        DrainResult(res.jobs.size, sent, failed, null, res.nextPollMs)
     }
 
     /**
@@ -119,7 +128,12 @@ object JobRunner {
         return true
     }
 
-    /** 三倉共用嘅渲染入口 —— 同 web `renderEscPosLines` / Companion `renderEscPos` 同源。 */
+    /**
+     * 三倉共用嘅渲染入口 —— 同 web `renderEscPosLines` / Companion `renderEscPos` 同源。
+     *
+     * 2026-10-30：統一由 `TicketRenderer` 分派 ⇒ 標籤機（`family:"label"`）喺
+     * **中繼路徑**一樣識行 TSPL（以前呢度完全冇消費 `family`，一律出 ESC/POS）。
+     */
     private fun render(
         job: PrintJobDto,
         cfg: PrinterCfgDto,
@@ -127,12 +141,7 @@ object JobRunner {
         storeName: String?,
         payment: String?,
         total: Double?,
-    ): ByteArray = when {
-        job.template != null -> EscPosRenderer.renderTemplateTicket(job, cfg)
-        kind == "receipt" -> EscPosRenderer.renderReceiptTicket(job, cfg, storeName, payment, total)
-        kind == "test" -> EscPosRenderer.renderTestPage(cfg, storeName)
-        else -> EscPosRenderer.renderKitchenTicket(job, cfg, storeName)
-    }
+    ): ByteArray = TicketRenderer.renderTicket(job, cfg, kind, storeName, payment, total)
 
     private suspend fun dispatch(
         context: Context,

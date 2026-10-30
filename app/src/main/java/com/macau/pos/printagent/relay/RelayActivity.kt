@@ -216,6 +216,7 @@ class RelayActivity : ComponentActivity() {
             append("紙寬：${prefs.defaultPaperSize}mm（冇 printer 快照時用）\n")
             append("已印 ${RelayState.printedCount} 張 · 失敗 ${RelayState.failedCount} 張\n")
             append("上次認領：${ago(RelayState.lastClaimAt)}　上次心跳：${ago(RelayState.lastHeartbeatAt)}\n")
+            append("輪詢間隔：${RelayState.nextPollInMs / 1000}s（server 建議）\n")
             append("上次叫醒：${ago(RelayState.lastWakeAt)}\n")
             if (RelayState.lastMessage.isNotBlank()) append("訊息：${RelayState.lastMessage}")
         }
